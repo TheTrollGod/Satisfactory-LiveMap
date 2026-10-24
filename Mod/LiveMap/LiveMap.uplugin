@@ -4,7 +4,7 @@
 	"VersionName": "0.1.0",
 	"SemVersion": "0.1.0",
 	"FriendlyName": "Live Map",
-	"Description": "Streams players, buildings, rails, trains and vehicles to a browser map over WebSocket.",
+	"Description": "Streams players, trains, vehicles, drones and rails to a browser map over WebSocket.",
 	"Category": "Modding",
 	"CreatedBy": "Anthony",
 	"CanContainContent": true,
@@ -20,6 +20,10 @@
 		{
 			"Name": "SML",
 			"SemVersion": "^3.12.0",
+			"Enabled": true
+		},
+		{
+			"Name": "ChaosVehiclesPlugin",
 			"Enabled": true
 		}
 	],

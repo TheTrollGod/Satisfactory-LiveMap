@@ -37,7 +37,7 @@ never dropped selectively, so a client is always either in step or resynced.
   "trains":   [{ "id": "FGTrain_3", "name": "Iron Express", "kind": "train", "pos": [0,0,0], "yaw": 0 }],
   "vehicles": [{ "id": "BP_Truck_C_2", "name": "BP_Truck_C", "kind": "wheeled", "pos": [0,0,0], "yaw": 0 }],
   "rails":    [{ "id": "Build_RailroadTrack_C_7", "points": [[0,0,0],[1000,0,0]] }],
-  "static":   { "buildings": 3, "lines": 4 }
+  "static":   { "buildings": 3, "lines": 4, "map": 2 }
 }
 ```
 
@@ -83,6 +83,13 @@ Categories: `production`, `power`, `storage`, `logistics`, `structure`,
 { "belts": [[0,0, 1000,0, 1000,800]], "pipes": [], "hypertubes": [], "power": [[0,0, 3000,0]] }
 ```
 Each polyline is flat `[x, y, x, y, ...]` in cm. Rails stay in the snapshot.
+
+### `map`
+A JPEG (`image/jpeg`) of the game's own map, covering exactly the world bounds
+in `web/src/coords.ts` (north up). The mod renders it once after load from the
+four `SlicedMap/Map_X-Y` textures the in-game map screen uses, from the
+player's own install; nothing is redistributed. Absent on servers that can't
+render (dedicated servers).
 
 ## Client -> server
 

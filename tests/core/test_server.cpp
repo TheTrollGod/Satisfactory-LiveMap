@@ -265,8 +265,8 @@ static void TestHealth()
 	S.Stop();
 }
 
-// GET a path; returns status, fills Body and the X-LiveMap-Version header.
-static int HttpGet(const char* Path, std::string* Body, std::string* Version = nullptr)
+// GET a path; returns status, fills Body and the X-LiveMap-Version / Content-Type headers.
+static int HttpGet(const char* Path, std::string* Body, std::string* Version = nullptr, std::string* Type = nullptr)
 {
 	char Err[256] = {0};
 	mg_connection* Conn = mg_download("127.0.0.1", GPort, 0, Err, sizeof(Err), "GET %s HTTP/1.0\r\nHost: localhost\r\n\r\n", Path);
@@ -276,14 +276,15 @@ static int HttpGet(const char* Path, std::string* Body, std::string* Version = n
 	}
 	const mg_response_info* Info = mg_get_response_info(Conn);
 	const int Status = Info ? Info->status_code : 0;
-	if (Info && Version)
+	for (int I = 0; Info && I < Info->num_headers; ++I)
 	{
-		for (int I = 0; I < Info->num_headers; ++I)
+		if (Version && std::strcmp(Info->http_headers[I].name, "X-LiveMap-Version") == 0)
 		{
-			if (std::strcmp(Info->http_headers[I].name, "X-LiveMap-Version") == 0)
-			{
-				*Version = Info->http_headers[I].value;
-			}
+			*Version = Info->http_headers[I].value;
+		}
+		if (Type && std::strcmp(Info->http_headers[I].name, "Content-Type") == 0)
+		{
+			*Type = Info->http_headers[I].value;
 		}
 	}
 	Body->clear();
@@ -312,6 +313,14 @@ static void TestStaticDocuments()
 	CHECK_EQ(Version, std::string("1"));
 	CHECK_EQ(HttpGet("/static/lines", &Body, &Version), 200);
 	CHECK_EQ(Version, std::string("2"));
+	std::string Type;
+	CHECK_EQ(HttpGet("/static/lines", &Body, nullptr, &Type), 200);
+	CHECK_EQ(Type, std::string("application/json"));
+	const std::string Png("\x89PNG\r\n\x1a\n\0\0", 10); // binary, with NULs
+	S.SetStatic("map", Png, "image/png");
+	CHECK_EQ(HttpGet("/static/map", &Body, nullptr, &Type), 200);
+	CHECK_EQ(Type, std::string("image/png"));
+	CHECK(Body == Png);
 	CHECK_EQ(HttpGet("/static/nope", &Body), 404);
 	CHECK_EQ(HttpGet("/static/", &Body), 404);
 

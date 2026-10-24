@@ -42,6 +42,10 @@ public:
 	UPROPERTY(EditDefaultsOnly, Category = "LiveMap")
 	float StaticRescanSeconds = 10.f;
 
+	/** Edge length in pixels of the terrain image rendered from the game's map texture. */
+	UPROPERTY(EditDefaultsOnly, Category = "LiveMap")
+	int32 TerrainSize = 4096;
+
 protected:
 	virtual void BeginPlay() override;
 	virtual void EndPlay(const EEndPlayReason::Type EndPlayReason) override;
@@ -51,6 +55,8 @@ private:
 	void RescanStatic();
 	void RescanRails();
 	void RescanBuildings();
+	/** Renders the in-game map's texture slices into one image and serves it at /static/map. */
+	void ExportTerrain();
 	void CollectDynamic(livemap::Frame& Out) const;
 	/** Picks up static documents the worker finished encoding. */
 	void PollStaticJobs();
@@ -58,6 +64,7 @@ private:
 
 	FTimerHandle DynamicTimer;
 	FTimerHandle StaticTimer;
+	FTimerHandle TerrainTimer;
 	uint32 LastRailsHash = 0;
 	bool bRailsPublished = false;
 	uint64 LastBuildingsHash = 0;

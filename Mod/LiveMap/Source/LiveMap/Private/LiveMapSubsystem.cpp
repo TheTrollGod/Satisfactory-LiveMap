@@ -3,8 +3,17 @@
 
 #include "Async/Async.h"
 #include "Components/SplineComponent.h"
+#include "Engine/Canvas.h"
+#include "Engine/Texture2D.h"
+#include "Engine/TextureRenderTarget2D.h"
 #include "EngineUtils.h"
 #include "HAL/PlatformTime.h"
+#include "Misc/App.h"
+#include "IImageWrapper.h"
+#include "IImageWrapperModule.h"
+#include "Kismet/KismetRenderingLibrary.h"
+#include "Modules/ModuleManager.h"
+#include "TextureResource.h"
 #include "TimerManager.h"
 
 #include "Buildables/FGBuildable.h"
@@ -135,6 +144,8 @@ void ALiveMapSubsystem::BeginPlay()
 	RescanStatic();
 	GetWorldTimerManager().SetTimer(DynamicTimer, this, &ALiveMapSubsystem::TickDynamic, 1.f / Config.TickHz, true);
 	GetWorldTimerManager().SetTimer(StaticTimer, this, &ALiveMapSubsystem::RescanStatic, StaticRescanSeconds, true);
+	// Once, a little after load so it doesn't stack on the save's own loading hitch.
+	GetWorldTimerManager().SetTimer(TerrainTimer, this, &ALiveMapSubsystem::ExportTerrain, 3.f, false);
 	UE_LOG(LogLiveMap, Log, TEXT("LiveMap: listening on port %d at %d Hz"), Port, Config.TickHz);
 }
 
@@ -142,6 +153,7 @@ void ALiveMapSubsystem::EndPlay(const EEndPlayReason::Type EndPlayReason)
 {
 	GetWorldTimerManager().ClearTimer(DynamicTimer);
 	GetWorldTimerManager().ClearTimer(StaticTimer);
+	GetWorldTimerManager().ClearTimer(TerrainTimer);
 	for (FLiveMapStaticJob& Job : StaticJobs)
 	{
 		Job.Version.Wait(); // they hold the server; don't leave them running past world teardown
@@ -465,9 +477,13 @@ void ALiveMapSubsystem::PollStaticJobs()
 	{
 		if (StaticJobs[I].Version.IsReady())
 		{
-			Differ->SetStaticVersion(StaticJobs[I].Name, StaticJobs[I].Version.Get());
+			// 0 means the job failed and already logged why; there's nothing new to announce.
+			if (const uint64 Version = StaticJobs[I].Version.Get())
+			{
+				Differ->SetStaticVersion(StaticJobs[I].Name, Version);
+				bAny = true;
+			}
 			StaticJobs.RemoveAtSwap(I);
-			bAny = true;
 		}
 	}
 	if (bAny)
@@ -476,4 +492,96 @@ void ALiveMapSubsystem::PollStaticJobs()
 		Server->Publish(Differ->Snapshot(), std::string(), Differ->Seq());
 		Server->RequestResync();
 	}
+}
+
+void ALiveMapSubsystem::ExportTerrain()
+{
+	if (!Server)
+	{
+		return;
+	}
+	if (!FApp::CanEverRender())
+	{
+		// Dedicated servers have no GPU to draw with. TODO: decode the mips on the CPU there.
+		UE_LOG(LogLiveMap, Log, TEXT("LiveMap: no terrain on a server that can't render"));
+		return;
+	}
+	const double T0 = FPlatformTime::Seconds();
+
+	// The map screen's material (Material_UI_MapFog) samples four slices,
+	// Map_<column>-<row>, that together cover the playable world bounds. We use
+	// the player's own install at runtime, so no Coffee Stain art ships with the mod.
+	UTexture2D* Slices[2][2] = {};
+	for (int32 X = 0; X < 2; ++X)
+	{
+		for (int32 Y = 0; Y < 2; ++Y)
+		{
+			const FString Path = FString::Printf(TEXT("/Game/FactoryGame/Interface/UI/Assets/MapTest/SlicedMap/Map_%d-%d.Map_%d-%d"), X, Y, X, Y);
+			UTexture2D* Tex = LoadObject<UTexture2D>(nullptr, *Path);
+			if (!Tex)
+			{
+				UE_LOG(LogLiveMap, Warning, TEXT("LiveMap: no terrain, could not load %s"), *Path);
+				return;
+			}
+			// Cooked textures stream their big mips in on demand; we want the top one.
+			Tex->SetForceMipLevelsToBeResident(30.f);
+			Tex->WaitForStreaming();
+			UE_LOG(LogLiveMap, Log, TEXT("LiveMap: terrain slice %d-%d is %dx%d"), X, Y, Tex->GetSizeX(), Tex->GetSizeY());
+			Slices[X][Y] = Tex;
+		}
+	}
+
+	// Cooked textures have no CPU copy, so let the GPU draw them into a render
+	// target and read that back.
+	const int32 Size = FMath::Clamp(TerrainSize, 512, 8192);
+	const float Half = Size / 2.f;
+	UTextureRenderTarget2D* Target = UKismetRenderingLibrary::CreateRenderTarget2D(this, Size, Size, RTF_RGBA8_SRGB, FLinearColor::Black, false);
+	if (!Target)
+	{
+		UE_LOG(LogLiveMap, Warning, TEXT("LiveMap: no terrain, could not create a %dx%d render target"), Size, Size);
+		return;
+	}
+	UCanvas* Canvas = nullptr;
+	FVector2D CanvasSize;
+	FDrawToRenderTargetContext Context;
+	UKismetRenderingLibrary::BeginDrawCanvasToRenderTarget(this, Target, Canvas, CanvasSize, Context);
+	for (int32 X = 0; X < 2; ++X)
+	{
+		for (int32 Y = 0; Y < 2; ++Y)
+		{
+			Canvas->K2_DrawTexture(Slices[X][Y], FVector2D(X * Half, Y * Half), FVector2D(Half, Half),
+				FVector2D::ZeroVector, FVector2D::UnitVector, FLinearColor::White, BLEND_Opaque);
+		}
+	}
+	UKismetRenderingLibrary::EndDrawCanvasToRenderTarget(this, Context);
+
+	TArray<FColor> Pixels;
+	FTextureRenderTargetResource* Resource = Target->GameThread_GetRenderTargetResource();
+	if (!Resource || !Resource->ReadPixels(Pixels) || Pixels.Num() != Size * Size)
+	{
+		UE_LOG(LogLiveMap, Warning, TEXT("LiveMap: no terrain, reading the render target back failed"));
+		return;
+	}
+	Target->ReleaseResource();
+	for (FColor& C : Pixels)
+	{
+		C.A = 255;
+	}
+	const double T1 = FPlatformTime::Seconds();
+
+	IImageWrapperModule& Images = FModuleManager::LoadModuleChecked<IImageWrapperModule>(FName("ImageWrapper"));
+	TSharedPtr<IImageWrapper> Jpeg = Images.CreateImageWrapper(EImageFormat::JPEG);
+	std::shared_ptr<livemap::Server> S = Server;
+	StaticJobs.Add({"map", Async(EAsyncExecution::ThreadPool, [S, Jpeg, Pixels = MoveTemp(Pixels), Size]() -> uint64
+	{
+		if (!Jpeg || !Jpeg->SetRaw(Pixels.GetData(), Pixels.Num() * sizeof(FColor), Size, Size, ERGBFormat::BGRA, 8))
+		{
+			UE_LOG(LogLiveMap, Warning, TEXT("LiveMap: no terrain, JPEG encoding failed"));
+			return 0;
+		}
+		const TArray64<uint8>& Out = Jpeg->GetCompressed(85);
+		UE_LOG(LogLiveMap, Log, TEXT("LiveMap: terrain image %dx%d, %lld KB"), Size, Size, Out.Num() / 1024);
+		return S->SetStatic("map", std::string(reinterpret_cast<const char*>(Out.GetData()), static_cast<size_t>(Out.Num())), "image/jpeg");
+	})});
+	UE_LOG(LogLiveMap, Log, TEXT("LiveMap: terrain rendered in %.0f ms on the game thread"), (T1 - T0) * 1000.0);
 }

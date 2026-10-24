@@ -42,6 +42,10 @@ check((await api("ids", "vehicles")).join() === "truck-1", "truck marker present
 check((await api("ids", "players")).includes("player-1"), "player marker present");
 check((await api("rails")) === 1, "rail polyline drawn from snapshot");
 
+// Terrain: an image served by the server at /static/map, under the building tiles.
+await page.waitForFunction(() => window.__livemap.terrain()?.loaded === true, null, { timeout: 5000 });
+check(true, "terrain image loaded from /static/map");
+
 // Static layers: fetched over HTTP after the snapshot announces their versions.
 await page.waitForFunction(() => window.__livemap.buildings().structure === 2000, null, { timeout: 5000 });
 check(true, "2000 foundations loaded from /static/buildings");

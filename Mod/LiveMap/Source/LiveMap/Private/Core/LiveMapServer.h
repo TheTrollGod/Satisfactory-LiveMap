@@ -52,7 +52,10 @@ namespace livemap
 		 */
 		void Publish(std::string Snapshot, std::string Delta, uint64_t Seq);
 
-		/** Game thread. Resend the snapshot to every client, e.g. after the static layer changed. */
+		/**
+		 * Game thread. Resend the latest published snapshot to every client, e.g. after
+		 * a static layer changed. Call it after the Publish() that carries the change.
+		 */
 		void RequestResync();
 
 		/**
@@ -60,7 +63,7 @@ namespace livemap
 		 * its new version (monotonic across all names, starting at 1). Big layers
 		 * (buildings) go here instead of in the snapshot so a resync stays cheap.
 		 */
-		uint64_t SetStatic(const std::string& Name, std::string Body);
+		uint64_t SetStatic(const std::string& Name, std::string Body, const char* ContentType = "application/json");
 
 		size_t ClientCount() const;
 		uint64_t ResyncCount() const;
@@ -112,6 +115,7 @@ namespace livemap
 		{
 			uint64_t Version = 0;
 			std::shared_ptr<const std::string> Body;
+			std::string ContentType;
 		};
 		mutable std::mutex StaticMutex;
 		std::map<std::string, StaticDoc> Statics;

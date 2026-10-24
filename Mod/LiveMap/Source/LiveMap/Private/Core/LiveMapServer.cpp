@@ -149,12 +149,13 @@ namespace livemap
 		QueueCv.notify_one();
 	}
 
-	uint64_t Server::SetStatic(const std::string& Name, std::string Body)
+	uint64_t Server::SetStatic(const std::string& Name, std::string Body, const char* ContentType)
 	{
 		std::lock_guard<std::mutex> Lock(StaticMutex);
 		StaticDoc& Doc = Statics[Name];
 		Doc.Version = ++StaticCounter;
 		Doc.Body = std::make_shared<const std::string>(std::move(Body));
+		Doc.ContentType = ContentType ? ContentType : "application/octet-stream";
 		return Doc.Version;
 	}
 
@@ -288,10 +289,10 @@ namespace livemap
 		}
 		// The body is a shared_ptr copy, so a concurrent SetStatic can't free it mid-write.
 		mg_printf(Conn,
-			"HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nAccess-Control-Allow-Origin: *\r\n"
+			"HTTP/1.1 200 OK\r\nContent-Type: %s\r\nAccess-Control-Allow-Origin: *\r\n"
 			"Access-Control-Expose-Headers: X-LiveMap-Version\r\nCache-Control: no-store\r\n"
 			"X-LiveMap-Version: %llu\r\nContent-Length: %llu\r\nConnection: close\r\n\r\n",
-			static_cast<unsigned long long>(Doc.Version), static_cast<unsigned long long>(Doc.Body->size()));
+			Doc.ContentType.c_str(), static_cast<unsigned long long>(Doc.Version), static_cast<unsigned long long>(Doc.Body->size()));
 		mg_write(Conn, Doc.Body->data(), Doc.Body->size());
 		return 200;
 	}

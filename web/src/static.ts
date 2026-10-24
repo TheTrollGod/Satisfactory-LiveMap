@@ -229,6 +229,7 @@ export function createStaticLayers(httpBase: string, onLoaded: (name: string) =>
 
   function sync(next: Record<string, number> | undefined) {
     for (const [name, v] of Object.entries(next ?? {})) {
+      if (name !== "buildings" && name !== "lines") continue; // e.g. "map" is an image, not ours
       wanted[name] = v;
       // !== not >: a restarted server counts from 1 again.
       if (versions[name] !== v && !inFlight.has(name)) void fetchDoc(name);

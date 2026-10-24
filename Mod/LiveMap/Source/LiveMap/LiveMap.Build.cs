@@ -22,6 +22,12 @@ public class LiveMap : ModuleRules
 			"SML",
 		});
 
+		// Terrain export: render-target readback and JPEG encoding.
+		PrivateDependencyModuleNames.AddRange(new[] {
+			"RenderCore",
+			"ImageWrapper",
+		});
+
 		// Engine-free core (Private/Core) and vendored civetweb, compiled from
 		// Private/Core/Civetweb.c. ws2_32 is pulled in by a #pragma on Windows.
 		PrivateIncludePaths.Add(Path.Combine(ModuleDirectory, "Private", "Core"));

@@ -25,7 +25,23 @@ const HTTP_BASE = (() => {
 const map = L.map("map", { crs: L.CRS.Simple, minZoom: -4, maxZoom: 2, zoomSnap: 0.25 });
 map.fitBounds(WORLD_BOUNDS);
 L.rectangle(WORLD_BOUNDS, { color: "#555", weight: 1, fill: false, interactive: false }).addTo(map);
-// TODO: L.imageOverlay("tiles/map.png", WORLD_BOUNDS).addTo(map) once we decide how to ship the map image.
+// Terrain: the mod renders the game's own map texture and serves it at
+// /static/map, so no Coffee Stain art ships with this repo. Own pane under the
+// building tiles (tilePane is z-index 200).
+map.createPane("terrain").style.zIndex = "150";
+let terrain: L.ImageOverlay | undefined;
+let terrainVersion = 0;
+function syncTerrain(version: number | undefined) {
+  if (!version || version === terrainVersion) return;
+  terrainVersion = version;
+  const url = `${HTTP_BASE}/static/map?v=${version}`;
+  if (terrain) {
+    terrain.setUrl(url);
+    return;
+  }
+  terrain = L.imageOverlay(url, WORLD_BOUNDS, { pane: "terrain", interactive: false }).addTo(map);
+  layerControl.addOverlay(terrain, "Terrain");
+}
 
 const status = document.getElementById("status")!;
 
@@ -46,7 +62,7 @@ for (const [kind, layer] of Object.entries(statics.lines)) {
   overlays[LINE_STYLE[kind].label] = layer;
 }
 Object.assign(overlays, { Rails: layers.rails, Players: layers.players, Trains: layers.trains, Vehicles: layers.vehicles });
-L.control.layers(undefined, overlays, { collapsed: false }).addTo(map);
+const layerControl = L.control.layers(undefined, overlays, { collapsed: false }).addTo(map);
 
 map.on("click", (ev: L.LeafletMouseEvent) => {
   // Inverse of toLatLng: lat = -y/100, lng = x/100.
@@ -114,6 +130,7 @@ function handle(msg: ServerMessage) {
       }
       drawRails(msg.rails);
       statics.sync(msg.static);
+      syncTerrain(msg.static?.map);
       lastSeq = msg.seq;
       break;
     case "delta":
@@ -177,6 +194,7 @@ function mockBuildings(): BuildingsDoc {
   buildings: () => Object.fromEntries(Object.entries(statics.buildings).map(([k, l]) => [k, l.count])),
   lines: () => Object.fromEntries(Object.entries(statics.lines).map(([k, l]) => [k, l.count])),
   staticVersions: () => ({ ...statics.versions }),
+  terrain: () => (terrain ? { url: terrain.getElement()?.src, loaded: terrain.getElement()?.complete } : null),
   hit: (x: number, y: number) => statics.hit(map, x, y),
   setView: (x: number, y: number, z: number) => map.setView(toLatLng([x, y]), z, { animate: false }),
   // Resolves once every visible static layer has drawn its tiles.

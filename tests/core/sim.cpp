@@ -14,6 +14,72 @@
 
 using namespace livemap;
 
+// Minimal PNG writer (RGB, zlib "stored" blocks) so the sim can serve a
+// terrain image without pulling in an image library.
+static uint32_t Crc(const unsigned char* P, size_t N, uint32_t C = 0xFFFFFFFFu)
+{
+	for (size_t I = 0; I < N; ++I)
+	{
+		C ^= P[I];
+		for (int K = 0; K < 8; ++K)
+		{
+			C = (C >> 1) ^ (0xEDB88320u & (0u - (C & 1u)));
+		}
+	}
+	return C;
+}
+
+static std::string MakePng(int W, int H)
+{
+	std::string Raw;
+	for (int Y = 0; Y < H; ++Y)
+	{
+		Raw += '\0'; // filter: none
+		for (int X = 0; X < W; ++X)
+		{
+			Raw += char(40 + X * 60 / W);
+			Raw += char(60 + Y * 80 / H);
+			Raw += char(50);
+		}
+	}
+	std::string Z = "\x78\x01";
+	uint32_t A = 1, B = 0;
+	for (const char Ch : Raw)
+	{
+		A = (A + static_cast<unsigned char>(Ch)) % 65521;
+		B = (B + A) % 65521;
+	}
+	for (size_t Off = 0; Off < Raw.size(); Off += 65535)
+	{
+		const size_t N = std::min<size_t>(65535, Raw.size() - Off);
+		Z += char(Off + N == Raw.size() ? 1 : 0);
+		Z += char(N & 0xFF); Z += char(N >> 8);
+		Z += char(~N & 0xFF); Z += char((~N >> 8) & 0xFF);
+		Z.append(Raw, Off, N);
+	}
+	const uint32_t Adler = (B << 16) | A;
+	for (int S = 24; S >= 0; S -= 8) Z += char(Adler >> S);
+
+	std::string Out("\x89PNG\r\n\x1a\n", 8);
+	auto Chunk = [&Out](const char* Type, const std::string& Data) {
+		for (int S = 24; S >= 0; S -= 8) Out += char(Data.size() >> S);
+		std::string Body = std::string(Type, 4) + Data;
+		Out += Body;
+		const uint32_t C = ~Crc(reinterpret_cast<const unsigned char*>(Body.data()), Body.size());
+		for (int S = 24; S >= 0; S -= 8) Out += char(C >> S);
+	};
+	std::string Ihdr;
+	for (const int V : {W, H})
+	{
+		for (int S = 24; S >= 0; S -= 8) Ihdr += char(V >> S);
+	}
+	Ihdr += std::string("\x08\x02\x00\x00\x00", 5); // 8-bit RGB
+	Chunk("IHDR", Ihdr);
+	Chunk("IDAT", Z);
+	Chunk("IEND", std::string());
+	return Out;
+}
+
 int main(int Argc, char** Argv)
 {
 	ServerConfig C;
@@ -66,6 +132,7 @@ int main(int Argc, char** Argv)
 		D.SetStaticVersion("lines", S.SetStatic("lines", EncodeLines(Lines)));
 	};
 	PublishFactory();
+	D.SetStaticVersion("map", S.SetStatic("map", MakePng(256, 256), "image/png"));
 
 	const auto Start = std::chrono::steady_clock::now();
 	for (int Tick = 0;; ++Tick)
@@ -93,16 +160,20 @@ int main(int Argc, char** Argv)
 		V.X = CX + 80000 * std::sin(T * 0.2); V.Y = CY - 60000;
 		F[ELayer::Vehicles].push_back(V);
 
-		if (Tick > 0 && Tick % (C.TickHz * 5) == 0)
+		const bool bGrow = Tick > 0 && Tick % (C.TickHz * 5) == 0;
+		if (bGrow)
 		{
 			Factory.Items.push_back({Machines % 2 ? 2u : 1u, FX + 1200.0 * Machines, FY + 400, 400, 15.0 * Machines});
 			++Machines;
 			PublishFactory();
-			S.RequestResync();
 		}
 
 		std::string Delta = D.Update(F);
 		S.Publish(D.Snapshot(), std::move(Delta), D.Seq());
+		if (bGrow)
+		{
+			S.RequestResync(); // after Publish, so the resync carries the new versions
+		}
 
 		if (Seconds && std::chrono::steady_clock::now() - Start > std::chrono::seconds(Seconds))
 		{

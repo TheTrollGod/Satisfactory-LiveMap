@@ -118,9 +118,9 @@ toolchain, a dedicated server.
 
 - **License.** Not picked. Pick one before publishing (MIT or MPL-2.0 are the
   usual choices for SML mods).
-- **Map tiles.** The background map is a Coffee Stain asset. Every community map
-  uses an extracted copy, but that's their IP; don't commit it to a public repo
-  without thinking about it.
+- **Map tiles.** The background map is a Coffee Stain asset. The mod renders it
+  at runtime from the player's own install and serves it at `/static/map`, so
+  the repo never contains it. Don't commit an extracted copy to a public repo.
 - **WebSocket library.** Went with civetweb (MIT) over uWebSockets. uWS needs
   prebuilt uSockets/libuv binaries per platform (FRM ships them); civetweb is
   one C file UBT compiles for Win64 and Linux itself. Cost: one thread per

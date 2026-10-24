@@ -85,6 +85,7 @@ namespace livemap
 		}
 
 		mg_set_request_handler(Context, "/health$", &Server::OnHealth, this);
+		mg_set_request_handler(Context, "/static/", &Server::OnStatic, this);
 		mg_set_websocket_handler(Context, "/ws$", &Server::OnWsConnect, &Server::OnWsReady,
 			&Server::OnWsData, &Server::OnWsClose, this);
 		return true;
@@ -146,6 +147,15 @@ namespace livemap
 			bResyncAll = true;
 		}
 		QueueCv.notify_one();
+	}
+
+	uint64_t Server::SetStatic(const std::string& Name, std::string Body)
+	{
+		std::lock_guard<std::mutex> Lock(StaticMutex);
+		StaticDoc& Doc = Statics[Name];
+		Doc.Version = ++StaticCounter;
+		Doc.Body = std::make_shared<const std::string>(std::move(Body));
+		return Doc.Version;
 	}
 
 	size_t Server::ClientCount() const
@@ -249,6 +259,40 @@ namespace livemap
 			"Content-Length: %u\r\nConnection: close\r\n\r\n",
 			static_cast<unsigned>(Body.size()));
 		mg_write(Conn, Body.data(), Body.size());
+		return 200;
+	}
+
+	int Server::OnStatic(mg_connection* Conn, void* User)
+	{
+		Server* Self = static_cast<Server*>(User);
+		const mg_request_info* Info = mg_get_request_info(Conn);
+		static const char Prefix[] = "/static/";
+		const char* Uri = Info && Info->local_uri ? Info->local_uri : "";
+		const std::string Name = std::strncmp(Uri, Prefix, sizeof(Prefix) - 1) == 0 ? Uri + sizeof(Prefix) - 1 : "";
+
+		StaticDoc Doc;
+		{
+			std::lock_guard<std::mutex> Lock(Self->StaticMutex);
+			auto It = Self->Statics.find(Name);
+			if (It != Self->Statics.end())
+			{
+				Doc = It->second;
+			}
+		}
+		if (!Doc.Body)
+		{
+			mg_printf(Conn,
+				"HTTP/1.1 404 Not Found\r\nContent-Type: text/plain\r\nAccess-Control-Allow-Origin: *\r\n"
+				"Content-Length: 9\r\nConnection: close\r\n\r\nnot found");
+			return 404;
+		}
+		// The body is a shared_ptr copy, so a concurrent SetStatic can't free it mid-write.
+		mg_printf(Conn,
+			"HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nAccess-Control-Allow-Origin: *\r\n"
+			"Access-Control-Expose-Headers: X-LiveMap-Version\r\nCache-Control: no-store\r\n"
+			"X-LiveMap-Version: %llu\r\nContent-Length: %llu\r\nConnection: close\r\n\r\n",
+			static_cast<unsigned long long>(Doc.Version), static_cast<unsigned long long>(Doc.Body->size()));
+		mg_write(Conn, Doc.Body->data(), Doc.Body->size());
 		return 200;
 	}
 

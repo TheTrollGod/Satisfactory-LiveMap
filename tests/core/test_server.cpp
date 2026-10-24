@@ -265,6 +265,79 @@ static void TestHealth()
 	S.Stop();
 }
 
+// GET a path; returns status, fills Body and the X-LiveMap-Version header.
+static int HttpGet(const char* Path, std::string* Body, std::string* Version = nullptr)
+{
+	char Err[256] = {0};
+	mg_connection* Conn = mg_download("127.0.0.1", GPort, 0, Err, sizeof(Err), "GET %s HTTP/1.0\r\nHost: localhost\r\n\r\n", Path);
+	if (!Conn)
+	{
+		return 0;
+	}
+	const mg_response_info* Info = mg_get_response_info(Conn);
+	const int Status = Info ? Info->status_code : 0;
+	if (Info && Version)
+	{
+		for (int I = 0; I < Info->num_headers; ++I)
+		{
+			if (std::strcmp(Info->http_headers[I].name, "X-LiveMap-Version") == 0)
+			{
+				*Version = Info->http_headers[I].value;
+			}
+		}
+	}
+	Body->clear();
+	char Buf[65536];
+	for (int N; (N = mg_read(Conn, Buf, sizeof(Buf))) > 0;)
+	{
+		Body->append(Buf, size_t(N));
+	}
+	mg_close_connection(Conn);
+	return Status;
+}
+
+static void TestStaticDocuments()
+{
+	Server S;
+	ServerConfig C;
+	C.Port = GPort;
+	CHECK(S.Start(C, nullptr));
+	std::string Body, Version;
+	CHECK_EQ(HttpGet("/static/buildings", &Body), 404);
+
+	CHECK_EQ(S.SetStatic("buildings", "{\"a\":1}"), uint64_t(1));
+	CHECK_EQ(S.SetStatic("lines", "{\"b\":2}"), uint64_t(2));
+	CHECK_EQ(HttpGet("/static/buildings", &Body, &Version), 200);
+	CHECK_EQ(Body, std::string("{\"a\":1}"));
+	CHECK_EQ(Version, std::string("1"));
+	CHECK_EQ(HttpGet("/static/lines", &Body, &Version), 200);
+	CHECK_EQ(Version, std::string("2"));
+	CHECK_EQ(HttpGet("/static/nope", &Body), 404);
+	CHECK_EQ(HttpGet("/static/", &Body), 404);
+
+	// 8 MB body, replaced while clients download it (run under TSan/ASan).
+	std::string Big(8 << 20, 'x');
+	S.SetStatic("buildings", Big);
+	std::atomic<bool> Stop{false};
+	std::thread Writer([&] {
+		while (!Stop)
+		{
+			S.SetStatic("buildings", std::string(8 << 20, 'y'));
+			std::this_thread::sleep_for(5ms);
+		}
+	});
+	for (int I = 0; I < 5; ++I)
+	{
+		std::string B;
+		CHECK_EQ(HttpGet("/static/buildings", &B), 200);
+		CHECK_EQ(B.size(), size_t(8 << 20));
+		CHECK(B.find_first_not_of(B[0]) == std::string::npos); // never a torn mix
+	}
+	Stop = true;
+	Writer.join();
+	S.Stop();
+}
+
 static void TestPortInUse()
 {
 	Server A, B;
@@ -358,6 +431,7 @@ int main()
 		{"late_joiner", TestLateJoinerGetsNoStaleDeltas},
 		{"request_resync", TestRequestResync},
 		{"health", TestHealth},
+		{"static_documents", TestStaticDocuments},
 		{"port_in_use", TestPortInUse},
 		{"restart", TestRestart},
 		{"stress_churn_resync", TestStressChurnAndResync},

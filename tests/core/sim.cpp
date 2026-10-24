@@ -1,9 +1,11 @@
-// Fake game: publishes players, trains and trucks moving around at TickHz.
-// Used for end-to-end testing the frontend without Satisfactory.
-//   livemap_sim [port] [seconds]
+// Fake game: publishes players, trains and trucks moving around at TickHz,
+// plus a static factory (foundations, machines, belts) that grows a machine
+// every 5 s. Used for end-to-end testing the frontend without Satisfactory.
+//   livemap_sim [port] [seconds] [foundations]
 #include "LiveMapCore.h"
 #include "LiveMapServer.h"
 
+#include <algorithm>
 #include <chrono>
 #include <cmath>
 #include <cstdio>
@@ -17,6 +19,7 @@ int main(int Argc, char** Argv)
 	ServerConfig C;
 	C.Port = Argc > 1 ? std::atoi(Argv[1]) : 8086;
 	const int Seconds = Argc > 2 ? std::atoi(Argv[2]) : 0;
+	const int Foundations = Argc > 3 ? std::atoi(Argv[3]) : 2000;
 
 	Server S;
 	std::string Err;
@@ -39,6 +42,30 @@ int main(int Argc, char** Argv)
 		Loop.Points.push_back({CX + R * std::cos(A), CY + R * std::sin(A), 0});
 	}
 	D.SetRails({Loop});
+
+	// Factory: a square slab of 8 m foundations east of the centre, machines on top.
+	BuildingSet Factory;
+	Factory.Classes.push_back({"Build_Foundation_8x4_01_C", "Foundation 8m x 4m", "structure", -400, -400, 400, 400});
+	Factory.Classes.push_back({"Build_ConstructorMk1_C", "Constructor", "production", -390, -500, 390, 500});
+	Factory.Classes.push_back({"Build_StorageContainerMk1_C", "Storage Container", "storage", -250, -500, 250, 500});
+	const int Side = std::max(1, int(std::sqrt(double(Foundations))));
+	const double FX = CX + 200000, FY = CY;
+	for (int I = 0; I < Foundations; ++I)
+	{
+		Factory.Items.push_back({0, FX + (I % Side) * 800.0, FY + (I / Side) * 800.0, 0, 0});
+	}
+	LineSet Lines;
+	for (int I = 0; I < 10; ++I)
+	{
+		Lines["belts"].push_back({{FX, FY + 1600.0 * I}, {FX + Side * 800.0, FY + 1600.0 * I}});
+	}
+	Lines["pipes"].push_back({{FX, FY - 2000}, {FX + Side * 800.0, FY - 2000}});
+	int Machines = 0;
+	auto PublishFactory = [&] {
+		D.SetStaticVersion("buildings", S.SetStatic("buildings", EncodeBuildings(Factory)));
+		D.SetStaticVersion("lines", S.SetStatic("lines", EncodeLines(Lines)));
+	};
+	PublishFactory();
 
 	const auto Start = std::chrono::steady_clock::now();
 	for (int Tick = 0;; ++Tick)
@@ -65,6 +92,14 @@ int main(int Argc, char** Argv)
 		V.Id = "truck-1"; V.Name = "Truck"; V.Kind = "Truck";
 		V.X = CX + 80000 * std::sin(T * 0.2); V.Y = CY - 60000;
 		F[ELayer::Vehicles].push_back(V);
+
+		if (Tick > 0 && Tick % (C.TickHz * 5) == 0)
+		{
+			Factory.Items.push_back({Machines % 2 ? 2u : 1u, FX + 1200.0 * Machines, FY + 400, 400, 15.0 * Machines});
+			++Machines;
+			PublishFactory();
+			S.RequestResync();
+		}
 
 		std::string Delta = D.Update(F);
 		S.Publish(D.Snapshot(), std::move(Delta), D.Seq());

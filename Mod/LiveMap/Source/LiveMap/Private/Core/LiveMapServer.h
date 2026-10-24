@@ -10,6 +10,7 @@
 #include <condition_variable>
 #include <cstdint>
 #include <deque>
+#include <map>
 #include <memory>
 #include <mutex>
 #include <string>
@@ -54,6 +55,13 @@ namespace livemap
 		/** Game thread. Resend the snapshot to every client, e.g. after the static layer changed. */
 		void RequestResync();
 
+		/**
+		 * Any thread. Replaces the document served at GET /static/<Name> and returns
+		 * its new version (monotonic across all names, starting at 1). Big layers
+		 * (buildings) go here instead of in the snapshot so a resync stays cheap.
+		 */
+		uint64_t SetStatic(const std::string& Name, std::string Body);
+
 		size_t ClientCount() const;
 		uint64_t ResyncCount() const;
 
@@ -71,6 +79,7 @@ namespace livemap
 		};
 
 		static int OnHealth(mg_connection* Conn, void* User);
+		static int OnStatic(mg_connection* Conn, void* User);
 		static int OnWsConnect(const mg_connection* Conn, void* User);
 		static void OnWsReady(mg_connection* Conn, void* User);
 		static int OnWsData(mg_connection* Conn, int Bits, char* Data, size_t Len, void* User);
@@ -98,5 +107,14 @@ namespace livemap
 		std::vector<std::unique_ptr<Client>> Clients;
 
 		std::thread Sender;
+
+		struct StaticDoc
+		{
+			uint64_t Version = 0;
+			std::shared_ptr<const std::string> Body;
+		};
+		mutable std::mutex StaticMutex;
+		std::map<std::string, StaticDoc> Statics;
+		uint64_t StaticCounter = 0;
 	};
 }

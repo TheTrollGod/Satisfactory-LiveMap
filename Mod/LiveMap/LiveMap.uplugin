@@ -4,7 +4,7 @@
 	"VersionName": "0.1.0",
 	"SemVersion": "0.1.0",
 	"FriendlyName": "Live Map",
-	"Description": "Streams players, trains, vehicles, drones and rails to a browser map over WebSocket.",
+	"Description": "Streams players, trains, vehicles, drones, rails and buildings to a browser map over WebSocket.",
 	"Category": "Modding",
 	"CreatedBy": "Anthony",
 	"CanContainContent": true,

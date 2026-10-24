@@ -1,6 +1,7 @@
 #include "LiveMapCore.h"
 
 #include <algorithm>
+#include <charconv>
 #include <cmath>
 
 namespace livemap
@@ -92,23 +93,10 @@ namespace livemap
 	void JsonWriter::Int(int64_t V)
 	{
 		Sep();
-		// Locale-independent on purpose: snprintf("%f") honours LC_NUMERIC.
+		// to_chars is locale-independent, unlike snprintf("%f") which honours LC_NUMERIC.
 		char Buf[24];
-		int N = 0;
-		uint64_t U = V < 0 ? 0 - static_cast<uint64_t>(V) : static_cast<uint64_t>(V);
-		do
-		{
-			Buf[N++] = static_cast<char>('0' + U % 10);
-			U /= 10;
-		} while (U);
-		if (V < 0)
-		{
-			Out += '-';
-		}
-		while (N)
-		{
-			Out += Buf[--N];
-		}
+		const std::to_chars_result R = std::to_chars(Buf, Buf + sizeof(Buf), V);
+		Out.append(Buf, static_cast<size_t>(R.ptr - Buf));
 	}
 
 	void JsonWriter::Raw(const char* S)
@@ -297,6 +285,149 @@ namespace livemap
 		}
 		W.Key("rails");
 		W.Raw(RailsJson.c_str());
+		W.Key("static");
+		W.BeginObject();
+		for (const auto& [Name, Version] : StaticVersions)
+		{
+			W.Key(Name.c_str());
+			W.Int(static_cast<int64_t>(Version));
+		}
+		W.EndObject();
+		W.EndObject();
+		return W.Take();
+	}
+
+	// --- Static layers ----------------------------------------------------
+
+	namespace
+	{
+		// FNV-style mix over the rounded values, so sub-centimetre jitter doesn't
+		// count as a change. Word-at-a-time: this runs on the game thread.
+		struct Fnv
+		{
+			uint64_t H = 1469598103934665603ull;
+			void Add(int64_t V)
+			{
+				H ^= static_cast<uint64_t>(V);
+				H *= 1099511628211ull;
+				H ^= H >> 29;
+			}
+			void Add(const std::string& S)
+			{
+				for (const char C : S)
+				{
+					H ^= static_cast<unsigned char>(C);
+					H *= 1099511628211ull;
+				}
+				Add(static_cast<int64_t>(S.size()));
+			}
+		};
+	}
+
+	uint64_t HashBuildings(const BuildingSet& Set)
+	{
+		Fnv F;
+		for (const BuildingClass& C : Set.Classes)
+		{
+			F.Add(C.Name); F.Add(C.Display); F.Add(C.Category);
+			F.Add(JsonWriter::Round(C.MinX)); F.Add(JsonWriter::Round(C.MinY));
+			F.Add(JsonWriter::Round(C.MaxX)); F.Add(JsonWriter::Round(C.MaxY));
+		}
+		for (const PlacedBuilding& B : Set.Items)
+		{
+			F.Add(B.Class);
+			F.Add(JsonWriter::Round(B.X)); F.Add(JsonWriter::Round(B.Y));
+			F.Add(JsonWriter::Round(B.Z)); F.Add(JsonWriter::Round(B.Yaw));
+		}
+		return F.H;
+	}
+
+	uint64_t HashLines(const LineSet& Lines)
+	{
+		Fnv F;
+		for (const auto& [Kind, Group] : Lines)
+		{
+			F.Add(Kind);
+			for (const Polyline& L : Group)
+			{
+				F.Add(static_cast<int64_t>(L.size()));
+				for (const auto& P : L)
+				{
+					F.Add(JsonWriter::Round(P[0])); F.Add(JsonWriter::Round(P[1]));
+				}
+			}
+		}
+		return F.H;
+	}
+
+	std::string EncodeBuildings(const BuildingSet& Set)
+	{
+		JsonWriter W;
+		W.Reserve(Set.Items.size() * 32 + Set.Classes.size() * 96 + 64);
+		W.BeginObject();
+		W.Key("classes");
+		W.BeginArray();
+		for (const BuildingClass& C : Set.Classes)
+		{
+			W.BeginObject();
+			W.Key("name"); W.String(C.Name);
+			if (!C.Display.empty()) { W.Key("display"); W.String(C.Display); }
+			W.Key("cat"); W.String(C.Category);
+			W.Key("box");
+			W.BeginArray(); W.Number(C.MinX); W.Number(C.MinY); W.Number(C.MaxX); W.Number(C.MaxY); W.EndArray();
+			W.EndObject();
+		}
+		W.EndArray();
+
+		std::vector<const PlacedBuilding*> Sorted;
+		Sorted.reserve(Set.Items.size());
+		for (const PlacedBuilding& B : Set.Items)
+		{
+			if (B.Class < Set.Classes.size())
+			{
+				Sorted.push_back(&B);
+			}
+		}
+		// Stable so equal heights keep collection order and the output (and its
+		// hash) only changes when the world does.
+		std::stable_sort(Sorted.begin(), Sorted.end(),
+			[](const PlacedBuilding* A, const PlacedBuilding* B) { return JsonWriter::Round(A->Z) < JsonWriter::Round(B->Z); });
+
+		W.Key("stride"); W.Int(5);
+		W.Key("items");
+		W.BeginArray();
+		for (const PlacedBuilding* B : Sorted)
+		{
+			W.Int(B->Class); W.Number(B->X); W.Number(B->Y); W.Number(B->Z); W.Number(B->Yaw);
+		}
+		W.EndArray();
+		W.EndObject();
+		return W.Take();
+	}
+
+	std::string EncodeLines(const LineSet& Lines)
+	{
+		JsonWriter W;
+		W.BeginObject();
+		for (const auto& [Kind, Group] : Lines)
+		{
+			W.Key(Kind.c_str());
+			W.BeginArray();
+			for (const Polyline& L : Group)
+			{
+				if (L.size() < 2)
+				{
+					continue;
+				}
+				W.BeginArray();
+				for (const auto& P : L)
+				{
+					W.Number(P[0]); W.Number(P[1]);
+				}
+				W.EndArray();
+			}
+			W.EndArray();
+		}
 		W.EndObject();
 		return W.Take();
 	}

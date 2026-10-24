@@ -4,6 +4,7 @@
 #include "check.h"
 
 #include <chrono>
+#include <random>
 #include <cmath>
 #include <cstring>
 #include <limits>
@@ -139,7 +140,7 @@ static void TestEmptySnapshot()
 	FrameDiffer D;
 	const std::string S = D.Snapshot();
 	Dump(S);
-	CHECK_EQ(S, std::string("{\"type\":\"snapshot\",\"seq\":0,\"players\":[],\"trains\":[],\"vehicles\":[],\"rails\":[]}"));
+	CHECK_EQ(S, std::string("{\"type\":\"snapshot\",\"seq\":0,\"players\":[],\"trains\":[],\"vehicles\":[],\"rails\":[],\"static\":{}}"));
 }
 
 static void TestJsonEscaping()
@@ -236,6 +237,83 @@ static void TestSnapshotCostWithManyRails()
 	}
 }
 
+static void TestSnapshotListsStaticVersions()
+{
+	FrameDiffer D;
+	D.SetStaticVersion("lines", 4);
+	D.SetStaticVersion("buildings", 3);
+	D.SetStaticVersion("lines", 5);
+	const std::string S = D.Snapshot();
+	Dump(S);
+	CHECK(CONTAINS(S, "\"static\":{\"buildings\":3,\"lines\":5}}"));
+}
+
+static void TestEncodeBuildings()
+{
+	BuildingSet Set;
+	Set.Classes.push_back({"Build_Foundation_8x4_C", "Foundation 8m x 4m", "structure", -400, -400, 400, 400});
+	Set.Classes.push_back({"Build_ConstructorMk1_C", "", "production", -390.4, -500, 390.4, 500.6});
+	Set.Items.push_back({1, 1000.4, -2000.6, 800, 90});
+	Set.Items.push_back({0, 0, 0, 0, 0});
+	Set.Items.push_back({7, 1, 1, 1, 1}); // bad class index: dropped
+	Set.Items.push_back({0, 800, 0, 0, -90});
+	const std::string S = EncodeBuildings(Set);
+	Dump(S);
+	CHECK_EQ(S, std::string(
+		"{\"classes\":["
+		"{\"name\":\"Build_Foundation_8x4_C\",\"display\":\"Foundation 8m x 4m\",\"cat\":\"structure\",\"box\":[-400,-400,400,400]},"
+		"{\"name\":\"Build_ConstructorMk1_C\",\"cat\":\"production\",\"box\":[-390,-500,390,501]}],"
+		"\"stride\":5,\"items\":[0,0,0,0,0,0,800,0,0,-90,1,1000,-2001,800,90]}"));
+}
+
+static void TestEncodeLines()
+{
+	LineSet L;
+	L["pipes"].push_back({{0, 0}, {100, 0}, {100, 100}});
+	L["belts"].push_back({{1.5, -2.5}, {3, 4}});
+	L["belts"].push_back({{9, 9}}); // single point: dropped
+	L["hypertubes"];
+	const std::string S = EncodeLines(L);
+	Dump(S);
+	CHECK(HashLines(L) != HashLines(LineSet{}));
+	CHECK_EQ(S, std::string("{\"belts\":[[2,-3,3,4]],\"hypertubes\":[],\"pipes\":[[0,0,100,0,100,100]]}"));
+}
+
+static void TestBuildingsEncodeCost()
+{
+	// A late-game save: ~200k pieces, most of them lightweight foundations.
+	// Hashing runs on the game thread every rescan; encoding on the thread pool.
+	BuildingSet Set;
+	for (int C = 0; C < 300; ++C)
+	{
+		Set.Classes.push_back({"Build_Class_" + std::to_string(C) + "_C", "Class", "structure", -400, -400, 400, 400});
+	}
+	std::mt19937 Rng(42);
+	std::uniform_real_distribution<double> Pos(-375000, 375000);
+	for (int I = 0; I < 200000; ++I)
+	{
+		Set.Items.push_back({uint32_t(Rng() % 300), Pos(Rng), Pos(Rng), double(Rng() % 4000), double(Rng() % 360)});
+	}
+	const auto T0 = std::chrono::steady_clock::now();
+	const uint64_t H = HashBuildings(Set);
+	const auto T1 = std::chrono::steady_clock::now();
+	const std::string S = EncodeBuildings(Set);
+	const auto T2 = std::chrono::steady_clock::now();
+	CHECK(S.size() > 200000u * 10);
+	CHECK(S.size() <= 200000u * 32 + 300 * 96 + 64); // the reserve() estimate holds
+	CHECK_EQ(HashBuildings(Set), H);
+	Set.Items[123].X += 0.2; // rounds to the same cm
+	CHECK_EQ(HashBuildings(Set), H);
+	Set.Items[123].X += 5;
+	CHECK(HashBuildings(Set) != H);
+	if (!GDump)
+	{
+		using Ms = std::chrono::duration<double, std::milli>;
+		std::printf("  buildings with 200k items: %zu KB, hash %.1f ms, encode %.1f ms\n", S.size() / 1024,
+			Ms(T1 - T0).count(), Ms(T2 - T1).count());
+	}
+}
+
 int main(int Argc, char** Argv)
 {
 	GDump = Argc > 1 && std::strcmp(Argv[1], "--dump") == 0;
@@ -252,6 +330,10 @@ int main(int Argc, char** Argv)
 	TestNestedSeparators();
 	TestManyEntities();
 	TestSnapshotCostWithManyRails();
+	TestSnapshotListsStaticVersions();
+	TestEncodeBuildings();
+	TestEncodeLines();
+	TestBuildingsEncodeCost();
 	if (!GDump)
 	{
 		std::printf("%s (%d failures)\n", GFailures ? "FAIL" : "OK", GFailures);

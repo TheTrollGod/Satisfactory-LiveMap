@@ -15,8 +15,8 @@ const check = (cond, msg) => {
 };
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
-function startSim() {
-  const p = spawn(simPath, [String(PORT)], { stdio: ["ignore", "pipe", "inherit"] });
+function startSim(port = PORT, extra = []) {
+  const p = spawn(simPath, [String(port), "0", ...extra], { stdio: ["ignore", "pipe", "inherit"] });
   return new Promise((resolve, reject) => {
     p.stdout.on("data", (d) => String(d).includes("listening") && resolve(p));
     p.on("exit", (code) => reject(new Error(`sim exited ${code}`)));
@@ -41,6 +41,18 @@ check((await api("ids", "trains")).join() === "train-1", "train marker present")
 check((await api("ids", "vehicles")).join() === "truck-1", "truck marker present");
 check((await api("ids", "players")).includes("player-1"), "player marker present");
 check((await api("rails")) === 1, "rail polyline drawn from snapshot");
+
+// Static layers: fetched over HTTP after the snapshot announces their versions.
+await page.waitForFunction(() => window.__livemap.buildings().structure === 2000, null, { timeout: 5000 });
+check(true, "2000 foundations loaded from /static/buildings");
+const lines0 = await api("lines");
+check(lines0.belts === 10 && lines0.pipes === 1, `belts and pipes loaded from /static/lines (${JSON.stringify(lines0)})`);
+// The sim's slab starts at x = 250301.83, y = 0 with 8 m foundations centred on the grid.
+check((await api("hit", 250301.83 + 100, 100)) === "Foundation 8m x 4m", "clicking a foundation finds it");
+check((await api("hit", 250301.83 - 2000, -5000)) === undefined, "clicking empty ground finds nothing");
+const machines0 = (await api("buildings")).production ?? 0;
+await page.waitForFunction((m) => (window.__livemap.buildings().production ?? 0) > m, machines0, { timeout: 8000 });
+check(true, "a newly built machine shows up after the layer changes (refetch on new version)");
 
 const p0 = await api("pos", "trains", "train-1");
 const s0 = await api("lastSeq");
@@ -77,6 +89,36 @@ const players = await api("ids", "players");
 check(players.join() === "player-1,player-2", `reconnected, state rebuilt from new snapshot (${players.join()})`);
 const seqAfter = await api("lastSeq");
 check(seqAfter < seqBeforeKill, `seq reset after server restart was accepted via snapshot (${seqBeforeKill} -> ${seqAfter})`);
+await page.waitForFunction(() => (window.__livemap.buildings().production ?? 0) === 0, null, { timeout: 5000 });
+check(true, "buildings refetched after restart (versions restart at 1, machines back to 0)");
+
+// Scale: a 200k-piece factory. Time the download+index, then full-map redraws.
+{
+  const PERF_PORT = PORT + 1;
+  const big = await startSim(PERF_PORT, ["200000"]);
+  const perf = await browser.newPage({ viewport: { width: 1600, height: 1000 } });
+  perf.on("pageerror", (e) => errors.push(String(e)));
+  const t0 = Date.now();
+  await perf.goto(`${url}?ws=ws://127.0.0.1:${PERF_PORT}/ws`);
+  await perf.waitForFunction(() => window.__livemap.buildings().structure === 200000, null, { timeout: 30000 });
+  const loadMs = Date.now() - t0;
+  check(loadMs < 10000, `200k foundations loaded in ${loadMs} ms`);
+  const redraw = await perf.evaluate(async () => {
+    const lm = window.__livemap;
+    const times = [];
+    for (const z of [-3, -1, 1]) {
+      const t = performance.now();
+      lm.setView(250301.83 + 200000, 200000, z);
+      await lm.tilesLoaded();
+      times.push(Math.round(performance.now() - t));
+    }
+    return times;
+  });
+  check(Math.max(...redraw) < 3000, `full-viewport redraw at zoom -3/-1/1: ${redraw.join("/")} ms`);
+  if (shot) await perf.screenshot({ path: shot.replace(/\.png$/, "-200k.png") });
+  await perf.close();
+  big.kill();
+}
 
 check(errors.length === 0, `no page errors${errors.length ? ": " + errors.join(" | ") : ""}`);
 await browser.close();

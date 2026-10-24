@@ -3,10 +3,9 @@
 A server-side Satisfactory mod that streams the world state (players, buildings,
 rails, trains, trucks, drones) over WebSocket to a browser map built on Leaflet.
 
-Status: the engine-free core (diffing, JSON, WebSocket server) and the frontend
-are tested end to end. The Unreal glue (`LiveMapSubsystem`) has been checked
-against the SML/FactoryGame headers but **has not been compiled in Unreal yet**.
-See [Testing](#testing).
+Status: works in-game (Satisfactory 1.2, SML 3.12) for players, trains,
+vehicles and rails. Buildings, belts, pipes, hypertubes and power lines are
+tested end to end against the sim but not yet in a real save. See [Testing](#testing).
 
 ## Decision: build from scratch, use FRM as a reference
 
@@ -49,7 +48,8 @@ ALiveMapSubsystem                   livemap::Server
   5 Hz: collect actors                sender thread: owns all writes
     -> FrameDiffer.Update  -- seq'd delta -->  queue  -->  "delta"     ->  Leaflet markers
     -> FrameDiffer.Snapshot (cached) ------->          new client / resync -> "snapshot"
-  10 s: rescan rails, resync if changed
+  10 s: rescan rails + buildings     GET /static/buildings, /static/lines
+    -> encode on thread pool  ---->  SetStatic (versioned)  ---->  canvas tiles
 ```
 
 Rules that matter:
@@ -58,9 +58,9 @@ Rules that matter:
    and produce plain structs and JSON strings. The server threads only ever see
    strings. `Publish()` never blocks on the network: a slow client stalls the
    sender thread, the queue overflows, and everyone gets a fresh snapshot.
-2. **Static vs dynamic layers.** A big save has tens of thousands of buildables.
-   Sending them every tick is how you get a 20 MB/s map. Buildings and rails go
-   out once on connect, then as incremental changes.
+2. **Static vs dynamic layers.** A big save has 100k+ buildables. Sending them
+   every tick is how you get a 20 MB/s map. Buildings, belts and pipes are HTTP
+   documents the client fetches when the snapshot announces a new version.
 3. **Server-side only.** `RequiredOnRemote: false`. It runs on the host or the
    dedicated server; clients don't need the mod.
 
@@ -72,9 +72,8 @@ Rules that matter:
    https://docs.ficsit.app/satisfactory-modding/latest/Development/BeginnersGuide/dependencies.html
 2. Copy or symlink `Mod/LiveMap` into `<StarterProject>/Mods/LiveMap`.
 3. Regenerate project files, build `Development Editor`.
-4. In the editor, create a `GameWorldModule` blueprint for the mod and add
-   `LiveMapSubsystem` to its Mod Subsystems list (SML registers subsystems via
-   that asset; it can't be created from C++ here).
+4. Nothing to set up in the editor: `FLiveMapModule` spawns the subsystem on
+   every authoritative game world.
 5. Package with Alpakit (Windows + LinuxServer targets).
 6. Frontend: `cd web && npm install && npm run dev`, point it at
    `ws://<host>:8086/ws` (port configurable).
@@ -101,18 +100,16 @@ node tests/e2e/e2e.mjs build/core/livemap_sim http://127.0.0.1:4173/ shot.png
 (cd web && npm run dev)   # open http://localhost:5173, or add ?mock for no server
 ```
 
-Not verified yet, needs the Starter Project on your machine:
-- `LiveMapSubsystem.cpp` and `LiveMap.Build.cs` compiling under UBT (MSVC and the
-  Linux cross toolchain), including `Civetweb.c` as a C file in the module.
-- The actor queries returning sensible data in a real save.
-- Alpakit packaging and running on a dedicated server.
+Verified on Windows: UBT build, Alpakit packaging, players/trains/vehicles/rails
+in a real save. Not verified yet: buildings in a real save, the Linux cross
+toolchain, a dedicated server.
 
 ## Roadmap
 
 - [x] M0: Frontend renders data with the world-bounds coordinate transform
-- [ ] M1: Mod boots, serves `/health`, logs player positions
-- [ ] M2: WebSocket server + players/vehicles/trains dynamic layer (core done and tested; needs in-game run)
-- [ ] M3: Static layer: rails (splines), buildings (footprints), belts
+- [x] M1: Mod boots, serves `/health`, logs player positions
+- [x] M2: WebSocket server + players/vehicles/trains dynamic layer (works in-game)
+- [ ] M3: Static layers: rails (done), buildings (footprints, incl. lightweight foundations), belts, pipes, hypertubes, power lines (written and tested outside the game; needs in-game run); terrain background
 - [ ] M4: Build/dismantle events -> incremental updates
 - [ ] M5: Config (port, tick rate, auth token), dedicated server testing
 - [ ] M6: Serve the built frontend from the mod itself

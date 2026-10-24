@@ -13,3 +13,6 @@ web/dist/
 
 # Don't commit extracted game assets by accident
 web/public/tiles/
+
+# Test builds
+build/

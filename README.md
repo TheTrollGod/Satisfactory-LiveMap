@@ -3,7 +3,10 @@
 A server-side Satisfactory mod that streams the world state (players, buildings,
 rails, trains, trucks, drones) over WebSocket to a browser map built on Leaflet.
 
-Status: scaffold only. Nothing here has been compiled against the Starter Project yet.
+Status: the engine-free core (diffing, JSON, WebSocket server) and the frontend
+are tested end to end. The Unreal glue (`LiveMapSubsystem`) has been checked
+against the SML/FactoryGame headers but **has not been compiled in Unreal yet**.
+See [Testing](#testing).
 
 ## Decision: build from scratch, use FRM as a reference
 
@@ -22,13 +25,19 @@ See [docs/DECISION.md](docs/DECISION.md). Short version:
 ## Layout
 
 ```
-Mod/LiveMap/          SML plugin. Drop into <StarterProject>/Mods/LiveMap
+Mod/LiveMap/                      SML plugin. Drop into <StarterProject>/Mods/LiveMap
   LiveMap.uplugin
-  Source/LiveMap/     C++ module: subsystem, collectors, server
-web/                  Vite + TypeScript + Leaflet frontend
+  Source/LiveMap/
+    Public/LiveMapSubsystem.h     Unreal glue: collects actors on the game thread
+    Private/Core/                 Engine-free C++: FrameDiffer, JsonWriter, Server
+    Private/Core/Civetweb.c       Compiles vendored civetweb into the module
+  Source/ThirdParty/civetweb/     civetweb v1.16, unmodified (MIT)
+web/                              Vite + TypeScript + Leaflet frontend
+tests/core/                       CMake build of the core + unit/integration tests + sim
+tests/e2e/                        Headless-browser test: sim -> WebSocket -> frontend
 docs/
-  DECISION.md         Fork vs scratch reasoning
-  PROTOCOL.md         WebSocket message format
+  DECISION.md                     Fork vs scratch reasoning
+  PROTOCOL.md                     WebSocket message format
 ```
 
 ## Architecture
@@ -36,19 +45,19 @@ docs/
 ```
 Game thread                         Server thread (uWS loop)           Browser
 -----------                         ------------------------           -------
-ALiveMapSubsystem
-  dynamic tick (5 Hz)  ->  snapshot  ->  diff vs last  ->  "delta"  ->  Leaflet markers
-    players, trains, vehicles, drones
-  static, event-driven ->  build/dismantle hooks ->       "upsert"/"remove"
-    buildings, rails, belts
-  on client connect    ->  full "snapshot" message
+ALiveMapSubsystem                   livemap::Server
+  5 Hz: collect actors                sender thread: owns all writes
+    -> FrameDiffer.Update  -- seq'd delta -->  queue  -->  "delta"     ->  Leaflet markers
+    -> FrameDiffer.Snapshot (cached) ------->          new client / resync -> "snapshot"
+  10 s: rescan rails, resync if changed
 ```
 
 Rules that matter:
 
 1. **Only touch UObjects on the game thread.** Collectors run on the game thread
-   and produce plain structs / JSON strings. The server thread only ever sees
-   serialized bytes handed over through a lock-free queue.
+   and produce plain structs and JSON strings. The server threads only ever see
+   strings. `Publish()` never blocks on the network: a slow client stalls the
+   sender thread, the queue overflows, and everyone gets a fresh snapshot.
 2. **Static vs dynamic layers.** A big save has tens of thousands of buildables.
    Sending them every tick is how you get a 20 MB/s map. Buildings and rails go
    out once on connect, then as incremental changes.
@@ -70,11 +79,39 @@ Rules that matter:
 6. Frontend: `cd web && npm install && npm run dev`, point it at
    `ws://<host>:8086/ws` (port configurable).
 
+## Testing
+
+What has been verified, and how to rerun it:
+
+```bash
+# Core: unit + integration tests (Linux/macOS, or MinGW for a Windows build)
+cmake -S tests/core -B build/core && cmake --build build/core
+./build/core/test_core && ./build/core/test_server
+
+# Same under ThreadSanitizer (suppressions only cover civetweb internals)
+cmake -S tests/core -B build/tsan -DSANITIZE=thread && cmake --build build/tsan
+TSAN_OPTIONS=suppressions=$PWD/tests/core/tsan.supp ./build/tsan/test_server
+
+# End to end: C++ sim server -> WebSocket -> frontend in headless Chromium
+(cd web && npm install && npm run build && npx vite preview --port 4173 &)
+node tests/e2e/e2e.mjs build/core/livemap_sim http://127.0.0.1:4173/ shot.png
+
+# Frontend against the sim by hand
+./build/core/livemap_sim 8086 &
+(cd web && npm run dev)   # open http://localhost:5173, or add ?mock for no server
+```
+
+Not verified yet, needs the Starter Project on your machine:
+- `LiveMapSubsystem.cpp` and `LiveMap.Build.cs` compiling under UBT (MSVC and the
+  Linux cross toolchain), including `Civetweb.c` as a C file in the module.
+- The actor queries returning sensible data in a real save.
+- Alpakit packaging and running on a dedicated server.
+
 ## Roadmap
 
-- [ ] M0: Frontend renders mock data with correct coordinate transform
+- [x] M0: Frontend renders data with the world-bounds coordinate transform
 - [ ] M1: Mod boots, serves `/health`, logs player positions
-- [ ] M2: WebSocket server + players/vehicles/trains dynamic layer
+- [ ] M2: WebSocket server + players/vehicles/trains dynamic layer (core done and tested; needs in-game run)
 - [ ] M3: Static layer: rails (splines), buildings (footprints), belts
 - [ ] M4: Build/dismantle events -> incremental updates
 - [ ] M5: Config (port, tick rate, auth token), dedicated server testing
@@ -87,7 +124,9 @@ Rules that matter:
 - **Map tiles.** The background map is a Coffee Stain asset. Every community map
   uses an extracted copy, but that's their IP; don't commit it to a public repo
   without thinking about it.
-- **WebSocket library.** Leaning uWebSockets (Apache-2.0, proven in FRM). civetweb
-  (MIT, single C file) is the simpler-to-vendor fallback.
+- **WebSocket library.** Went with civetweb (MIT) over uWebSockets. uWS needs
+  prebuilt uSockets/libuv binaries per platform (FRM ships them); civetweb is
+  one C file UBT compiles for Win64 and Linux itself. Cost: one thread per
+  viewer, which is fine for a map.
 - **Auth.** An open port on a dedicated server leaks base layouts and player
   positions. Needs at least a shared token before anyone exposes it publicly.

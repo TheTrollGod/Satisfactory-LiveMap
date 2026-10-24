@@ -1,0 +1,11 @@
+# civetweb v1.16 STOP_FLAG_ASSIGN passes a plain read of the flag as the CAS
+# "expected" value. Benign (aligned word, retried in a loop) and only on shutdown.
+race:STOP_FLAG_ASSIGN
+
+# civetweb's get_random() (frame masking) uses unsynchronized statics. It is only
+# called by the websocket *client* API, which only the tests use, never the mod.
+race:get_random
+
+# civetweb's client reader thread vs mg_close_connection on the same client
+# connection. Client API again: test harness only.
+race:websocket_client_thread

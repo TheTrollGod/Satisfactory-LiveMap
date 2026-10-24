@@ -1,28 +1,30 @@
+using System.IO;
 using UnrealBuildTool;
 
 public class LiveMap : ModuleRules
 {
 	public LiveMap(ReadOnlyTargetRules Target) : base(Target)
 	{
-		PCHUsage = PCHUsageMode.UseExplicitOrSharedPCHs;
 		CppStandard = CppStandardVersion.Cpp20;
+		DefaultBuildSettings = BuildSettingsVersion.Latest;
+		PCHUsage = PCHUsageMode.UseExplicitOrSharedPCHs;
 		bLegacyPublicIncludePaths = false;
 
-		// If you hit unresolved FactoryGame symbols, copy the full dependency
-		// list from the Starter Project's ExampleMod Build.cs.
+		// SML re-exports FactoryGame and its transitive dependencies.
 		PublicDependencyModuleNames.AddRange(new[] {
 			"Core",
 			"CoreUObject",
 			"Engine",
-			"Json",
-			"JsonUtilities",
+			// FGWheeledVehicle.h pulls in Chaos vehicle headers.
 			"ChaosVehiclesCore",
 			"ChaosVehicles",
 			"FactoryGame",
 			"SML",
 		});
 
-		// TODO(M2): vendor uWebSockets under Source/ThirdParty and add it here
-		// (headers + uSockets/libuv/zlib static libs per platform: Win64, Linux).
+		// Engine-free core (Private/Core) and vendored civetweb, compiled from
+		// Private/Core/Civetweb.c. ws2_32 is pulled in by a #pragma on Windows.
+		PrivateIncludePaths.Add(Path.Combine(ModuleDirectory, "Private", "Core"));
+		PrivateIncludePaths.Add(Path.Combine(ModuleDirectory, "..", "ThirdParty", "civetweb", "include"));
 	}
 }

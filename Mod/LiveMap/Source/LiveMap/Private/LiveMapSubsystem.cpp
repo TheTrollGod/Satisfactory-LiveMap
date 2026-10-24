@@ -1,15 +1,37 @@
 #include "LiveMapSubsystem.h"
 #include "LiveMapModule.h"
 
+#include "Components/SplineComponent.h"
 #include "EngineUtils.h"
 #include "TimerManager.h"
-#include "Dom/JsonObject.h"
-#include "Serialization/JsonSerializer.h"
-#include "Serialization/JsonWriter.h"
 
+#include "Buildables/FGBuildableRailroadTrack.h"
 #include "FGCharacterPlayer.h"
+#include "FGDroneVehicle.h"
+#include "FGRailroadVehicle.h"
 #include "FGTrain.h"
 #include "WheeledVehicles/FGWheeledVehicle.h"
+
+namespace
+{
+	std::string ToUtf8(const FString& S)
+	{
+		const FTCHARToUTF8 Conv(*S);
+		return std::string(Conv.Get(), Conv.Length());
+	}
+
+	void Fill(livemap::Entity& E, const AActor* Actor, const FString& Name, const TCHAR* Kind)
+	{
+		const FVector P = Actor->GetActorLocation();
+		E.Id = ToUtf8(Actor->GetName());
+		E.Name = ToUtf8(Name);
+		E.Kind = ToUtf8(Kind);
+		E.X = P.X;
+		E.Y = P.Y;
+		E.Z = P.Z;
+		E.Yaw = Actor->GetActorRotation().Yaw;
+	}
+}
 
 ALiveMapSubsystem::ALiveMapSubsystem()
 {
@@ -20,95 +42,132 @@ void ALiveMapSubsystem::BeginPlay()
 {
 	Super::BeginPlay();
 
-	// TODO(M2): start the uWS server on its own thread here.
-	const float Interval = 1.f / FMath::Max(DynamicTickHz, 0.1f);
-	GetWorldTimerManager().SetTimer(DynamicTimer, this, &ALiveMapSubsystem::TickDynamic, Interval, true);
+	Differ = std::make_unique<livemap::FrameDiffer>();
+	Server = std::make_unique<livemap::Server>();
 
-	UE_LOG(LogLiveMap, Log, TEXT("LiveMap subsystem started, port %d, %.1f Hz"), Port, DynamicTickHz);
+	livemap::ServerConfig Config;
+	Config.Port = Port;
+	Config.TickHz = FMath::Clamp(DynamicTickHz, 1, 30);
+	std::string Error;
+	if (!Server->Start(Config, &Error))
+	{
+		UE_LOG(LogLiveMap, Error, TEXT("LiveMap: could not listen on port %d: %s"), Port, UTF8_TO_TCHAR(Error.c_str()));
+		Server.reset();
+		return;
+	}
+
+	RescanStatic();
+	GetWorldTimerManager().SetTimer(DynamicTimer, this, &ALiveMapSubsystem::TickDynamic, 1.f / Config.TickHz, true);
+	GetWorldTimerManager().SetTimer(StaticTimer, this, &ALiveMapSubsystem::RescanStatic, StaticRescanSeconds, true);
+	UE_LOG(LogLiveMap, Log, TEXT("LiveMap: listening on port %d at %d Hz"), Port, Config.TickHz);
 }
 
 void ALiveMapSubsystem::EndPlay(const EEndPlayReason::Type EndPlayReason)
 {
 	GetWorldTimerManager().ClearTimer(DynamicTimer);
-	// TODO(M2): stop the server thread and join it.
+	GetWorldTimerManager().ClearTimer(StaticTimer);
+	if (Server)
+	{
+		Server->Stop(); // joins the server threads
+		Server.reset();
+	}
+	Differ.reset();
 	Super::EndPlay(EndPlayReason);
 }
 
 void ALiveMapSubsystem::TickDynamic()
 {
-	const FString Json = FrameToJson(CollectDynamic());
-	// TODO(M2): diff against the previous frame and enqueue to the server thread.
-	UE_LOG(LogLiveMap, Verbose, TEXT("%s"), *Json);
+	if (!Server)
+	{
+		return;
+	}
+	livemap::Frame Frame;
+	CollectDynamic(Frame);
+	std::string Delta = Differ->Update(Frame);
+	Server->Publish(Differ->Snapshot(), std::move(Delta), Differ->Seq());
 }
 
-FLiveMapDynamicFrame ALiveMapSubsystem::CollectDynamic() const
+void ALiveMapSubsystem::CollectDynamic(livemap::Frame& Out) const
 {
-	FLiveMapDynamicFrame Frame;
 	UWorld* World = GetWorld();
 
 	for (TActorIterator<AFGCharacterPlayer> It(World); It; ++It)
 	{
-		FLiveMapEntity& E = Frame.Players.AddDefaulted_GetRef();
-		E.Id = It->GetName();
-		// TODO: resolve the display name via the player state.
-		E.Name = E.Id;
-		E.Kind = TEXT("player");
-		E.Pos = It->GetActorLocation();
-		E.Yaw = It->GetActorRotation().Yaw;
+		// TODO: offline players' bodies stay in the world on dedicated servers.
+		// IsPlayerOnline() is protected; decide whether to show them greyed out.
+		Fill(Out[livemap::ELayer::Players].emplace_back(), *It, It->GetCachedPlayerName(), TEXT("player"));
 	}
 
 	for (TActorIterator<AFGTrain> It(World); It; ++It)
 	{
-		// TODO: verify against FGTrain.h; position should come from the lead
-		// locomotive (GetFirstVehicle or similar), not the train actor itself.
-		FLiveMapEntity& E = Frame.Trains.AddDefaulted_GetRef();
-		E.Id = It->GetName();
-		E.Name = It->GetTrainName().ToString();
-		E.Kind = TEXT("train");
-		E.Pos = It->GetActorLocation();
+		// AFGTrain is a bookkeeping actor with no meaningful location; use the
+		// lead vehicle. Trains mid-construction can have none.
+		const AFGRailroadVehicle* Lead = It->GetFirstVehicle();
+		if (!Lead)
+		{
+			continue;
+		}
+		livemap::Entity& E = Out[livemap::ELayer::Trains].emplace_back();
+		Fill(E, Lead, It->GetTrainName().ToString(), TEXT("train"));
+		E.Id = ToUtf8(It->GetName()); // stable across a lead-vehicle change
 	}
 
 	for (TActorIterator<AFGWheeledVehicle> It(World); It; ++It)
 	{
-		FLiveMapEntity& E = Frame.Vehicles.AddDefaulted_GetRef();
-		E.Id = It->GetName();
-		E.Kind = It->GetClass()->GetName();
-		E.Pos = It->GetActorLocation();
-		E.Yaw = It->GetActorRotation().Yaw;
+		Fill(Out[livemap::ELayer::Vehicles].emplace_back(), *It, It->GetClass()->GetName(), TEXT("wheeled"));
 	}
 
-	return Frame;
+	for (TActorIterator<AFGDroneVehicle> It(World); It; ++It)
+	{
+		Fill(Out[livemap::ELayer::Vehicles].emplace_back(), *It, It->GetClass()->GetName(), TEXT("drone"));
+	}
 }
 
-FString ALiveMapSubsystem::FrameToJson(const FLiveMapDynamicFrame& Frame)
+void ALiveMapSubsystem::RescanStatic()
 {
-	auto ToArray = [](const TArray<FLiveMapEntity>& Items)
+	if (!Server)
 	{
-		TArray<TSharedPtr<FJsonValue>> Out;
-		for (const FLiveMapEntity& E : Items)
+		return;
+	}
+
+	// Cheap pass first: did the set of track actors change at all?
+	TArray<AFGBuildableRailroadTrack*> Tracks;
+	uint32 Hash = 0;
+	for (TActorIterator<AFGBuildableRailroadTrack> It(GetWorld()); It; ++It)
+	{
+		Tracks.Add(*It);
+		Hash = HashCombine(Hash, GetTypeHash(It->GetFName()));
+	}
+	if (bRailsPublished && Hash == LastRailsHash)
+	{
+		return;
+	}
+
+	std::vector<livemap::Rail> Rails;
+	Rails.reserve(Tracks.Num());
+	for (const AFGBuildableRailroadTrack* Track : Tracks)
+	{
+		const USplineComponent* Spline = Track->GetSplineComponent();
+		if (!Spline)
 		{
-			TSharedRef<FJsonObject> Obj = MakeShared<FJsonObject>();
-			Obj->SetStringField(TEXT("id"), E.Id);
-			Obj->SetStringField(TEXT("name"), E.Name);
-			Obj->SetStringField(TEXT("kind"), E.Kind);
-			Obj->SetArrayField(TEXT("pos"), {
-				MakeShared<FJsonValueNumber>(E.Pos.X),
-				MakeShared<FJsonValueNumber>(E.Pos.Y),
-				MakeShared<FJsonValueNumber>(E.Pos.Z) });
-			Obj->SetNumberField(TEXT("yaw"), E.Yaw);
-			Out.Add(MakeShared<FJsonValueObject>(Obj));
+			continue;
 		}
-		return Out;
-	};
+		livemap::Rail& R = Rails.emplace_back();
+		R.Id = ToUtf8(Track->GetName());
+		// Sample along the spline (about every 10 m) so curves stay curved.
+		const float Length = Spline->GetSplineLength();
+		const int32 Samples = FMath::Clamp(FMath::CeilToInt(Length / 1000.f), 1, 32);
+		for (int32 I = 0; I <= Samples; ++I)
+		{
+			const FVector P = Spline->GetLocationAtDistanceAlongSpline(Length * I / Samples, ESplineCoordinateSpace::World);
+			R.Points.push_back({P.X, P.Y, P.Z});
+		}
+	}
 
-	TSharedRef<FJsonObject> Root = MakeShared<FJsonObject>();
-	Root->SetStringField(TEXT("type"), TEXT("delta"));
-	Root->SetArrayField(TEXT("players"), ToArray(Frame.Players));
-	Root->SetArrayField(TEXT("trains"), ToArray(Frame.Trains));
-	Root->SetArrayField(TEXT("vehicles"), ToArray(Frame.Vehicles));
-
-	FString Out;
-	TSharedRef<TJsonWriter<>> Writer = TJsonWriterFactory<>::Create(&Out);
-	FJsonSerializer::Serialize(Root, Writer);
-	return Out;
+	LastRailsHash = Hash;
+	bRailsPublished = true;
+	Differ->SetRails(Rails);
+	Server->Publish(Differ->Snapshot(), std::string(), Differ->Seq());
+	Server->RequestResync();
+	UE_LOG(LogLiveMap, Log, TEXT("LiveMap: published %d track segments"), static_cast<int32>(Rails.size()));
 }

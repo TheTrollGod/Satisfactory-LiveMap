@@ -1,0 +1,15 @@
+# Unreal / Alpakit
+Mod/LiveMap/Binaries/
+Mod/LiveMap/Intermediate/
+Saved/
+DerivedDataCache/
+*.sln
+*.VC.db
+.vs/
+
+# Web
+web/node_modules/
+web/dist/
+
+# Don't commit extracted game assets by accident
+web/public/tiles/

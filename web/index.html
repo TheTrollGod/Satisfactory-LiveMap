@@ -1,0 +1,18 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Satisfactory Live Map</title>
+    <style>
+      html, body, #map { height: 100%; margin: 0; background: #1b1d22; }
+      #status { position: absolute; top: 8px; right: 8px; z-index: 1000;
+        font: 12px system-ui; color: #ddd; background: #000a; padding: 4px 8px; border-radius: 4px; }
+    </style>
+  </head>
+  <body>
+    <div id="map"></div>
+    <div id="status">connecting…</div>
+    <script type="module" src="/src/main.ts"></script>
+  </body>
+</html>

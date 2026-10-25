@@ -31,16 +31,56 @@ L.rectangle(WORLD_BOUNDS, { color: "#555", weight: 1, fill: false, interactive: 
 map.createPane("terrain").style.zIndex = "150";
 let terrain: L.ImageOverlay | undefined;
 let terrainVersion = 0;
-function syncTerrain(version: number | undefined) {
+let terrainBlobUrl: string | undefined;
+// The image is several MB, so fetch it ourselves to show progress while it
+// downloads; the rest of the map stays usable meanwhile.
+const loading = document.getElementById("loading")!;
+const loadingText = loading.querySelector("span")!;
+const loadingBar = loading.querySelector<HTMLElement>(".bar > div")!;
+async function syncTerrain(version: number | undefined) {
   if (!version || version === terrainVersion) return;
   terrainVersion = version;
-  const url = `${HTTP_BASE}/static/map?v=${version}`;
-  if (terrain) {
-    terrain.setUrl(url);
-    return;
+  loading.hidden = false;
+  loadingText.textContent = "Loading map…";
+  loadingBar.style.width = "0";
+  try {
+    const res = await fetch(`${HTTP_BASE}/static/map?v=${version}`, { cache: "no-store" });
+    if (!res.ok || !res.body) throw new Error(`HTTP ${res.status}`);
+    const total = Number(res.headers.get("Content-Length")) || 0;
+    const reader = res.body.getReader();
+    const chunks: Uint8Array[] = [];
+    let received = 0;
+    for (;;) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      chunks.push(value);
+      received += value.length;
+      if (total) {
+        loadingText.textContent = `Loading map… ${(received / 1048576).toFixed(1)} / ${(total / 1048576).toFixed(1)} MB`;
+        loadingBar.style.width = `${(100 * received) / total}%`;
+      }
+    }
+    if (version !== terrainVersion) return; // a newer map arrived meanwhile
+    const url = URL.createObjectURL(new Blob(chunks, { type: res.headers.get("Content-Type") ?? "image/jpeg" }));
+    if (terrain) {
+      terrain.setUrl(url);
+    } else {
+      terrain = L.imageOverlay(url, WORLD_BOUNDS, { pane: "terrain", interactive: false }).addTo(map);
+      layerControl.addOverlay(terrain, "Terrain");
+    }
+    if (terrainBlobUrl) URL.revokeObjectURL(terrainBlobUrl);
+    terrainBlobUrl = url;
+    loadingText.textContent = "Drawing map…";
+    loadingBar.style.width = "100%";
+    terrain.once("load error", () => {
+      if (version === terrainVersion) loading.hidden = true;
+    });
+  } catch (err) {
+    if (version !== terrainVersion) return;
+    console.warn("terrain load failed", err);
+    terrainVersion = 0; // retry on the next snapshot
+    loading.hidden = true;
   }
-  terrain = L.imageOverlay(url, WORLD_BOUNDS, { pane: "terrain", interactive: false }).addTo(map);
-  layerControl.addOverlay(terrain, "Terrain");
 }
 
 const status = document.getElementById("status")!;

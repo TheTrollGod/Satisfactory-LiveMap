@@ -44,7 +44,7 @@ public:
 
 	/** Edge length in pixels of the terrain image rendered from the game's map texture. */
 	UPROPERTY(EditDefaultsOnly, Category = "LiveMap")
-	int32 TerrainSize = 4096;
+	int32 TerrainSize = 8192;
 
 protected:
 	virtual void BeginPlay() override;

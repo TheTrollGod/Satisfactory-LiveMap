@@ -51,7 +51,36 @@ The server needs SML too. [Satisfactory Mod Manager](https://smm.ficsit.app/) ca
 install mods on a server (local folder or SFTP), or use
 [ficsit-cli](https://github.com/satisfactorymodding/ficsit-cli) on the server itself.
 
-Then install Live Map by hand, the same way as above, using the server zip:
+#### Linux: install script
+
+Stop the server, then run this on it. Replace the path with your server's install
+folder (the one that contains `FactoryGame/`):
+
+```bash
+wget -qO- https://raw.githubusercontent.com/TheTrollGod/Satisfactory-LiveMap/main/scripts/install.sh | bash -s -- ~/SatisfactoryDedicatedServer
+```
+
+If you'd rather read the script before running it:
+
+```bash
+wget https://raw.githubusercontent.com/TheTrollGod/Satisfactory-LiveMap/main/scripts/install.sh
+less install.sh
+bash install.sh ~/SatisfactoryDedicatedServer
+```
+
+Leave out the path and it tries the usual locations. Run it again to update. Other options:
+
+```bash
+bash install.sh --web ~/livemap-web ~/SatisfactoryDedicatedServer   # also fetch the map page
+bash install.sh --version v0.1.0-build.12 ~/SatisfactoryDedicatedServer   # a specific release
+bash install.sh --uninstall ~/SatisfactoryDedicatedServer
+```
+
+Run it as the user that owns the server files (often `steam`), not as root.
+
+#### By hand
+
+Or install it the same way as above, using the server zip:
 
 ```bash
 # Linux example; adjust the path to your server install

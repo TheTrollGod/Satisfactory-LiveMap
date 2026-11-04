@@ -213,6 +213,7 @@ jobs:
             touch "$MSVC_DIR/.installed"
             rm -rf "$RUNNER_TEMP/msvc-download"
           fi
+          echo "UE_WINE_MSVC=$(realpath "$MSVC_DIR")" >> "$GITHUB_ENV"
 
       - name: Save MSVC
         if: steps.msvc-cache.outputs.cache-hit != 'true'
@@ -220,7 +221,6 @@ jobs:
         with:
           path: ${{ env.CACHE }}/msvc
           key: ${{ steps.msvc-cache.outputs.cache-primary-key }}
-          echo "UE_WINE_MSVC=$(realpath "$MSVC_DIR")" >> "$GITHUB_ENV"
 
       # ---------- SML Starter Project + this mod ----------
       - uses: actions/checkout@v6

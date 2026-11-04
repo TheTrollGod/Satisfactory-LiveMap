@@ -60,14 +60,9 @@ jobs:
         run: |
           cmake -S tests/core -B build/tsan -DSANITIZE=thread && cmake --build build/tsan -j"$(nproc)"
           TSAN_OPTIONS=suppressions=$PWD/tests/core/tsan.supp ./build/tsan/test_server
-      - uses: actions/upload-artifact@v7
-        with:
-          name: livemap-sim
-          path: build/core/livemap_sim
-          retention-days: 1
 
+  # Runs alongside core-tests; it builds its own copy of the simulator.
   web-and-e2e:
-    needs: core-tests
     runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v6
@@ -79,10 +74,8 @@ jobs:
       - name: Build frontend
         working-directory: web
         run: npm ci && npm run build
-      - uses: actions/download-artifact@v5
-        with:
-          name: livemap-sim
-          path: build/core
+      - name: Build simulator
+        run: cmake -S tests/core -B build/core -DCMAKE_BUILD_TYPE=Release && cmake --build build/core -j"$(nproc)" --target livemap_sim
       - name: Install Playwright
         run: |
           npm i -g playwright@${PLAYWRIGHT_VERSION}

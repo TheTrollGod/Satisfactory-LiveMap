@@ -1,81 +1,76 @@
-# Installing Live Map
+# Live Map: Installation and Operations Guide
 
-Live Map has two parts:
+Audience: administrators deploying Live Map on a Satisfactory dedicated server or a
+player-hosted (listen) server.
 
-- **The mod** runs wherever the world is hosted and streams it over WebSocket on
-  port 8086. There's one zip per place it can run:
-  - `LiveMap-Windows-<version>.zip`: you host from the game on Windows.
-  - `LiveMap-WindowsServer-<version>.zip`: Windows dedicated server.
-  - `LiveMap-LinuxServer-<version>.zip`: Linux dedicated server.
-- **The map page** (`LiveMap-Web-<version>.zip`) is a static web page you open in
-  a browser. It connects to the mod and draws the map.
+## 1. Overview
 
-Both are attached to every [release](https://github.com/TheTrollGod/Satisfactory-LiveMap/releases).
+Live Map has two components:
 
-## Requirements
+| Component | Runs on | Function |
+|---|---|---|
+| Mod (`LiveMap`) | The machine hosting the world: dedicated server or the host player's game | Reads world state on the game thread and serves it over HTTP and WebSocket |
+| Map frontend | Any static web server | Single-page app (HTML/JS). Connects to the mod from the viewer's browser |
 
-- Satisfactory 1.2 or newer. For hosting from the game: the **Steam** version on
-  Windows (the Epic build needs a different binary that the release doesn't include
-  yet). Dedicated servers work on Windows and Linux.
-- [Satisfactory Mod Loader (SML)](https://ficsit.app/mod/SML) 3.12 or newer. The easiest
-  way to get it is to install any mod with
-  [Satisfactory Mod Manager](https://smm.ficsit.app/), which pulls SML in for you.
-- Live Map runs on whoever hosts the world. Players joining your game don't need it.
+The mod is server-side only (`RequiredOnRemote: false`). Connecting players do not
+need it installed.
 
-## 1. Install the mod
+### 1.1 Network interface
 
-1. Download `LiveMap-Windows-<version>.zip` from the latest release.
-2. Open your game folder. In Steam: right-click Satisfactory > Manage > Browse local files.
-3. Go to `FactoryGame\Mods`. Create it if it doesn't exist (SML creates it).
-4. Make a folder named `LiveMap` there and extract the zip into it. You should end up with:
+The mod opens one TCP listener, **port 8086**, on all IPv4 interfaces. HTTP and WebSocket
+share the port. There is no TLS.
 
-   ```
-   FactoryGame\Mods\LiveMap\LiveMap.uplugin
-   FactoryGame\Mods\LiveMap\Binaries\Win64\...
-   FactoryGame\Mods\LiveMap\Content\Paks\Windows\...
-   ```
+| Path | Protocol | Purpose |
+|---|---|---|
+| `/health` | HTTP GET | Liveness check, returns `200` with a JSON body |
+| `/ws` | WebSocket | Snapshot on connect, then dynamic deltas (players, vehicles, trains, drones) at 5 Hz |
+| `/static/*` | HTTP GET | Versioned static layers (buildings, rails, belts, pipes, power lines) and the terrain image (`/static/map`) |
 
-   If you see `Mods\LiveMap\LiveMap\LiveMap.uplugin`, you extracted one level too
-   deep: move the inner contents up.
+HTTP responses carry `Access-Control-Allow-Origin: *`, so the frontend can be served
+from a different origin than the mod. The browser connects to the mod directly; the
+frontend's web server does not proxy anything by default.
 
-5. Start the game and load a save. The first time, Windows may ask whether to let
-   Satisfactory through the firewall. Allow it on private networks if you want to
-   view the map from another device.
+### 1.2 Release artifacts
 
-To check it's running, open <http://localhost:8086/health> in a browser while the
-save is loaded.
+Each [release](https://github.com/TheTrollGod/Satisfactory-LiveMap/releases) is tagged
+`v<version>-build.<n>` and contains:
 
-### On a dedicated server
+| File | Target |
+|---|---|
+| `LiveMap-LinuxServer-<v>.zip` | Linux dedicated server |
+| `LiveMap-WindowsServer-<v>.zip` | Windows dedicated server |
+| `LiveMap-Windows-<v>.zip` | Game client on Windows (listen server). Steam build only |
+| `LiveMap-Web-<v>.zip` | Map frontend (static files) |
 
-The server needs SML too. [Satisfactory Mod Manager](https://smm.ficsit.app/) can
-install mods on a server (local folder or SFTP), or use
-[ficsit-cli](https://github.com/satisfactorymodding/ficsit-cli) on the server itself.
+Each mod zip holds the plugin root: `LiveMap.uplugin`, `Binaries/<platform>/`,
+`Content/Paks/<platform>/`. It extracts to `FactoryGame/Mods/LiveMap/`.
 
-#### Linux: install script
+## 2. Requirements
 
-1. Stop the server.
-2. Log in as the user that owns the server files (often `steam`), not root.
-3. Go into the server's install folder, the one that contains `FactoryGame/`.
-   Yours may be named differently:
+- Satisfactory 1.2 or later (build 513885+).
+- **Satisfactory Mod Loader (SML) 3.12 or later**, installed on the same host.
+  Live Map does not load without it. Install it with
+  [Satisfactory Mod Manager](https://smm.ficsit.app/) (supports local and SFTP
+  server targets) or [ficsit-cli](https://github.com/satisfactorymodding/ficsit-cli).
+- Linux install script: `bash`, `wget` or `curl`, and `unzip` (falls back to
+  `python3` or `bsdtar`).
+- Inbound TCP 8086 reachable from wherever the map will be viewed.
 
-   ```bash
-   cd ~/SatisfactoryServer
-   ```
+## 3. Installation
 
-4. Run the script:
+Stop the server before installing or updating. The mod is loaded at startup only.
 
-   ```bash
-   wget -qO- https://raw.githubusercontent.com/TheTrollGod/Satisfactory-LiveMap/main/scripts/install.sh | bash
-   ```
+### 3.1 Linux dedicated server (script)
 
-   You should see `Installed Live Map to .../FactoryGame/Mods/LiveMap`. If it warns
-   that SML is missing, install SML before starting the server.
+Run as the account that owns the server files (commonly `steam`), not root, from
+the server's install directory (the one containing `FactoryGame/`):
 
-5. Start the server and check it with `curl http://localhost:8086/health`.
+```bash
+cd ~/SatisfactoryServer
+wget -qO- https://raw.githubusercontent.com/TheTrollGod/Satisfactory-LiveMap/main/scripts/install.sh | bash
+```
 
-To update later, stop the server, `cd` into the same folder, and run the same command.
-
-If you'd rather read the script before running it:
+To review the script before executing it:
 
 ```bash
 cd ~/SatisfactoryServer
@@ -84,88 +79,185 @@ less install.sh
 bash install.sh
 ```
 
-More options, run from the server folder (with the piped form, put them after
-`bash -s --`, for example `| bash -s -- --uninstall`):
+What it does:
+
+1. Resolves the server directory: the argument if given, otherwise the current
+   directory, otherwise common locations (`~/SatisfactoryDedicatedServer`, Steam
+   library paths, `/home/steam/...`, `/opt/satisfactory`, `/config/gamefiles` for
+   the common Docker image). Fails if no `FactoryGame/` is found.
+2. Queries the GitHub Releases API and downloads `LiveMap-LinuxServer-*.zip`.
+3. Replaces `FactoryGame/Mods/LiveMap/` with the zip contents.
+4. Warns if `FactoryGame/Mods/SML/` is absent.
+
+Script reference (with the piped form, pass options after `bash -s --`, e.g.
+`... | bash -s -- --uninstall`):
+
+| Option | Effect |
+|---|---|
+| `[SERVER_DIR]` | Install into this directory instead of auto-detecting |
+| `--version TAG` | Install a specific release tag instead of the latest |
+| `--zip FILE` | Install from a local zip; no download (offline hosts) |
+| `--web DIR` | Also download and extract the frontend into `DIR` |
+| `--uninstall` | Remove `FactoryGame/Mods/LiveMap/` |
+| `-h`, `--help` | Usage |
+
+Exit status is non-zero on any failure; the existing install is left in place if
+the download or extraction fails.
+
+### 3.2 Linux dedicated server (manual)
 
 ```bash
-bash install.sh --web ~/livemap-web            # also fetch the map page into ~/livemap-web
-bash install.sh --version v0.1.0-build.12      # install a specific release
-bash install.sh --uninstall                    # remove Live Map
+cd ~/SatisfactoryServer/FactoryGame/Mods
+rm -rf LiveMap && mkdir LiveMap
+unzip /path/to/LiveMap-LinuxServer-<v>.zip -d LiveMap
+test -f LiveMap/LiveMap.uplugin && echo ok
 ```
 
-If you run it from somewhere else, it looks in a few common server locations, or you
-can pass the folder at the end: `bash install.sh /path/to/server`.
+### 3.3 Windows dedicated server
 
-#### By hand
+```powershell
+$mods = "C:\SatisfactoryServer\FactoryGame\Mods"
+Remove-Item "$mods\LiveMap" -Recurse -Force -ErrorAction SilentlyContinue
+Expand-Archive LiveMap-WindowsServer-<v>.zip -DestinationPath "$mods\LiveMap"
+Test-Path "$mods\LiveMap\LiveMap.uplugin"
+```
 
-Or install it the same way as above, using the server zip:
+### 3.4 Listen server (host player's game, Windows/Steam)
+
+Extract `LiveMap-Windows-<v>.zip` into
+`<Steam library>\steamapps\common\Satisfactory\FactoryGame\Mods\LiveMap\`. The mod
+starts when the host loads a save. The Epic Games build is not supported (it
+requires a differently named binary not included in releases).
+
+## 4. Firewall
+
+Open inbound TCP 8086 on the host and on any upstream firewall or cloud security
+group.
 
 ```bash
-# Linux example; adjust the path to your server install
-cd ~/SatisfactoryDedicatedServer/FactoryGame/Mods
-mkdir -p LiveMap && cd LiveMap
-unzip ~/LiveMap-LinuxServer-<version>.zip
-ls LiveMap.uplugin   # should exist at this level
+sudo ufw allow 8086/tcp                                      # ufw
+sudo firewall-cmd --permanent --add-port=8086/tcp && sudo firewall-cmd --reload   # firewalld
 ```
 
-On Windows servers, extract `LiveMap-WindowsServer-<version>.zip` into
-`<server>\FactoryGame\Mods\LiveMap\` instead.
-
-Restart the server, then open TCP port 8086 in the server's firewall (for example
-`sudo ufw allow 8086/tcp`) and your hosting provider's firewall if it has one.
-Check it with `curl http://<server-ip>:8086/health`.
-
-On a dedicated server the map has no terrain background yet (the server has no GPU
-to render it). Players, vehicles, trains, rails and buildings all show.
-
-## 2. Open the map
-
-The map page has to be served over HTTP; opening `index.html` straight from disk
-won't work.
-
-1. Download `LiveMap-Web-<version>.zip` and extract it anywhere.
-2. In that folder, start a local web server. Either of these works:
-
-   ```bash
-   npx serve -l 5173 .
-   ```
-
-   ```bash
-   python -m http.server 5173
-   ```
-
-3. Open <http://localhost:5173>. It connects to `ws://localhost:8086/ws` by default.
-
-### Viewing from another machine
-
-Point the page at the host's address with the `ws` parameter:
-
-```
-http://localhost:5173/?ws=ws://192.168.1.50:8086/ws
+```powershell
+New-NetFirewallRule -DisplayName "Satisfactory Live Map" -Direction Inbound -Protocol TCP -LocalPort 8086 -Action Allow
 ```
 
-Replace `192.168.1.50` with the IP of the PC or server running the world, and make
-sure the firewall allows port 8086. For a dedicated server, you can also put the map
-page on the server itself and serve it from there.
+## 5. Security considerations
 
-There is no password on the map yet. Anyone who can reach port 8086 can see player
-positions and your base layout, so don't forward it to the internet.
+- **No authentication and no TLS.** Anyone who can reach port 8086 can see player
+  positions and the full base layout. Do not expose it to the internet as-is.
+- Restrict the source range, e.g. `sudo ufw allow from 192.168.1.0/24 to any port 8086 proto tcp`,
+  or keep 8086 internal and put an authenticating TLS reverse proxy in front (5.1).
+- The mod only reads world state; it accepts no commands that change the game.
 
-## Updating
+### 5.1 Reverse proxy (nginx example)
 
-Close the game, delete `FactoryGame\Mods\LiveMap`, and repeat step 1 with the new zip.
+Serves the frontend and proxies the mod under one HTTPS host with basic auth. The
+frontend derives the static-layer URL from the WebSocket host, so `/ws` and
+`/static/` must be at the root of the proxied host.
 
-## Uninstalling
+```nginx
+server {
+    listen 443 ssl;
+    server_name map.example.com;
+    ssl_certificate     /etc/letsencrypt/live/map.example.com/fullchain.pem;
+    ssl_certificate_key /etc/letsencrypt/live/map.example.com/privkey.pem;
 
-Delete `FactoryGame\Mods\LiveMap`. The mod only reads the world, so your saves
-keep working without it.
+    auth_basic           "Live Map";
+    auth_basic_user_file /etc/nginx/livemap.htpasswd;
 
-## Troubleshooting
+    root /var/www/livemap;            # extracted LiveMap-Web zip
+    index index.html;
 
-- **The game says LiveMap needs SML, or the mod doesn't load.** Install or update
-  SML (see Requirements).
-- **The page says "disconnected".** Make sure a save is loaded (the mod only runs
-  in a loaded world), and check <http://localhost:8086/health>.
-- **"could not listen on port 8086" in `FactoryGame.log`.** Something else is using
-  the port. Close it and reload the save.
-- Logs are in `%LOCALAPPDATA%\FactoryGame\Saved\Logs\FactoryGame.log`; search for `LiveMap`.
+    location /ws {
+        proxy_pass http://127.0.0.1:8086;
+        proxy_http_version 1.1;
+        proxy_set_header Upgrade $http_upgrade;
+        proxy_set_header Connection "upgrade";
+        proxy_read_timeout 1h;
+    }
+    location /static/ { proxy_pass http://127.0.0.1:8086; }
+    location /health  { proxy_pass http://127.0.0.1:8086; }
+}
+```
+
+Viewers then open `https://map.example.com/?ws=wss://map.example.com/ws`. With this
+setup, block 8086 externally.
+
+## 6. Map frontend
+
+The frontend is static and must be served over HTTP(S); `file://` does not work
+(ES modules).
+
+```bash
+bash install.sh --web /var/www/livemap      # or unzip LiveMap-Web-<v>.zip yourself
+cd /var/www/livemap && python3 -m http.server 5173   # quick test only
+```
+
+Any static server works (nginx, Caddy, `npx serve`). The page connects to
+`ws://localhost:8086/ws` unless told otherwise:
+
+| Query parameter | Example | Effect |
+|---|---|---|
+| `ws` | `?ws=ws://10.0.0.5:8086/ws` | WebSocket endpoint of the mod |
+| `mock` | `?mock` | Synthetic data, no server needed (frontend testing) |
+
+## 7. Verification
+
+```bash
+curl -i http://<host>:8086/health          # expect HTTP/1.1 200 OK
+grep LiveMap <server>/FactoryGame/Saved/Logs/FactoryGame.log
+```
+
+A healthy start logs `LiveMap: listening on port 8086 at 5 Hz`. On a dedicated
+server it also logs `LiveMap: no terrain on a server that can't render` (expected,
+see 8).
+
+Log locations:
+
+| Host | Log |
+|---|---|
+| Linux dedicated server | `<server>/FactoryGame/Saved/Logs/FactoryGame.log` |
+| Windows dedicated server | `<server>\FactoryGame\Saved\Logs\FactoryGame.log` |
+| Windows game client | `%LOCALAPPDATA%\FactoryGame\Saved\Logs\FactoryGame.log` |
+
+## 8. Configuration and limitations
+
+Settings are compiled-in defaults; there is no config file yet.
+
+| Setting | Value |
+|---|---|
+| Listen port | 8086 |
+| Dynamic update rate | 5 Hz |
+| Static layer rescan | every 10 s |
+| Terrain image size | 8192 px |
+
+Known limitations:
+
+- No terrain background on dedicated servers (no GPU to render it). All other layers work.
+- Dedicated server builds are produced by CI but have not yet been verified on a live server.
+- The listen-server build supports Steam only.
+
+## 9. Update, rollback, removal
+
+| Task | Procedure |
+|---|---|
+| Update | Stop server, rerun the script (or repeat the manual install), start server |
+| Rollback | Stop server, `bash install.sh --version <older tag>` |
+| Remove | Stop server, `bash install.sh --uninstall` or delete `FactoryGame/Mods/LiveMap/` |
+
+The mod's subsystem is not part of the save game (it does not implement the save
+interface), so saves load normally after removal.
+
+## 10. Troubleshooting
+
+| Symptom | Cause / action |
+|---|---|
+| Mod not loaded, no `LiveMap` log lines | SML missing or older than 3.12, or wrong zip for the platform. Check `FactoryGame/Mods/SML/` and that `LiveMap/Binaries/` contains your platform |
+| `could not listen on port 8086` in log | Port in use (`ss -ltnp 'sport = :8086'` / `Get-NetTCPConnection -LocalPort 8086`). Free it and restart |
+| `/health` works locally, not remotely | Firewall or security group (section 4) |
+| Frontend shows "disconnected" | Wrong `ws` parameter, port blocked, or no world loaded yet (the mod starts with the world) |
+| Frontend loads but no buildings | Static layers rebuild every 10 s after load; wait, then check the browser console for failed `/static/` requests |
+| Mixed-content error in browser | Page served over HTTPS but `ws=ws://...`. Use the reverse proxy and `wss://` (5.1) |
+| Script: `couldn't find the server` | Run from the directory containing `FactoryGame/`, or pass it as an argument |

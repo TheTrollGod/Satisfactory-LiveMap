@@ -229,7 +229,8 @@ jobs:
           ./wwise-cli integrate-ue --integration-version "$WWISE_INTEGRATION" --project "$WORK/SML/FactoryGame.uproject" >/dev/null
 
       - name: Build Development Editor
-        run: "$WORK/ue/Engine/Build/BatchFiles/Linux/Build.sh" FactoryEditor Linux Development -project="$WORK/SML/FactoryGame.uproject"
+        run: |
+          "$WORK/ue/Engine/Build/BatchFiles/Linux/Build.sh" FactoryEditor Linux Development -project="$WORK/SML/FactoryGame.uproject"
 
       - name: Package LiveMap (Alpakit PackagePlugin)
         run: |

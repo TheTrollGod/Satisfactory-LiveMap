@@ -38,7 +38,7 @@ jobs:
   core-tests:
     runs-on: ubuntu-24.04
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
       - name: Build core
         run: cmake -S tests/core -B build/core -DCMAKE_BUILD_TYPE=Release && cmake --build build/core -j"$(nproc)"
       - name: Unit and integration tests
@@ -47,7 +47,7 @@ jobs:
         run: |
           cmake -S tests/core -B build/tsan -DSANITIZE=thread && cmake --build build/tsan -j"$(nproc)"
           TSAN_OPTIONS=suppressions=$PWD/tests/core/tsan.supp ./build/tsan/test_server
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         with:
           name: livemap-sim
           path: build/core/livemap_sim
@@ -57,8 +57,8 @@ jobs:
     needs: core-tests
     runs-on: ubuntu-24.04
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-node@v4
+      - uses: actions/checkout@v6
+      - uses: actions/setup-node@v5
         with:
           node-version: 22
           cache: npm
@@ -66,7 +66,7 @@ jobs:
       - name: Build frontend
         working-directory: web
         run: npm ci && npm run build
-      - uses: actions/download-artifact@v4
+      - uses: actions/download-artifact@v5
         with:
           name: livemap-sim
           path: build/core
@@ -77,10 +77,10 @@ jobs:
       - name: End-to-end test
         run: |
           chmod +x build/core/livemap_sim
-          (cd web && npx vite preview --port 4173 --strictPort &)
+          (cd web && npx vite preview --host 127.0.0.1 --port 4173 --strictPort &)
           npx -y wait-on@8.0.1 -t 30000 http://127.0.0.1:4173/
           NODE_PATH="$(npm root -g)" node tests/e2e/e2e.mjs "$PWD/build/core/livemap_sim" http://127.0.0.1:4173/ e2e.png
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         if: always()
         with:
           name: e2e-screenshot
@@ -193,7 +193,7 @@ jobs:
           echo "UE_WINE_MSVC=$(realpath "$MSVC_DIR")" >> "$GITHUB_ENV"
 
       # ---------- SML Starter Project + this mod ----------
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
         with:
           path: LiveMap
 

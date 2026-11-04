@@ -132,7 +132,7 @@ jobs:
       # ---------- Wine (built from source with the typelib patch, like SML) ----------
       - name: Restore Wine build
         id: wine-cache
-        uses: actions/cache@v4
+        uses: actions/cache/restore@v4
         with:
           path: ${{ env.CACHE }}/wine
           key: wine-${{ env.WINE_VERSION }}-mr9640-${{ runner.os }}
@@ -154,6 +154,14 @@ jobs:
           make install
           rm -rf "$CACHE/wine-src"
 
+      # Saved right away (not at job end) so a later failure doesn't throw away the hour this takes.
+      - name: Save Wine build
+        if: steps.wine-cache.outputs.cache-hit != 'true'
+        uses: actions/cache/save@v4
+        with:
+          path: ${{ env.CACHE }}/wine
+          key: ${{ steps.wine-cache.outputs.cache-primary-key }}
+
       - name: Set up Wine
         run: |
           echo "$CACHE/wine/bin" >> "$GITHUB_PATH"
@@ -168,7 +176,7 @@ jobs:
       # ---------- MSVC 14.38 under Wine ----------
       - name: Restore MSVC
         id: msvc-cache
-        uses: actions/cache@v4
+        uses: actions/cache/restore@v4
         with:
           path: ${{ env.CACHE }}/msvc
           key: msvc-17.8-sdk22621-${{ runner.os }}-v1
@@ -195,6 +203,13 @@ jobs:
             touch "$MSVC_DIR/.installed"
             rm -rf "$RUNNER_TEMP/msvc-download"
           fi
+
+      - name: Save MSVC
+        if: steps.msvc-cache.outputs.cache-hit != 'true'
+        uses: actions/cache/save@v4
+        with:
+          path: ${{ env.CACHE }}/msvc
+          key: ${{ steps.msvc-cache.outputs.cache-primary-key }}
           echo "UE_WINE_MSVC=$(realpath "$MSVC_DIR")" >> "$GITHUB_ENV"
 
       # ---------- SML Starter Project + this mod ----------

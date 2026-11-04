@@ -86,6 +86,11 @@ jobs:
           name: e2e-screenshot
           path: e2e.png
           if-no-files-found: ignore
+      - uses: actions/upload-artifact@v7
+        with:
+          name: web-dist
+          path: web/dist
+          retention-days: 7
 
   package-and-release:
     needs: [core-tests, web-and-e2e]
@@ -240,15 +245,32 @@ jobs:
             -clientconfig=Shipping -serverconfig=Shipping -platform=Win64 -nocompileeditor -installed -utf8output
           ls -la "$WORK/SML/Saved/ArchivedPlugins/LiveMap/"
 
+      - uses: actions/download-artifact@v5
+        with:
+          name: web-dist
+          path: ${{ env.WORK }}/web-dist
+
       - name: Publish GitHub Release
         working-directory: ${{ env.WORK }}/SML/Saved/ArchivedPlugins/LiveMap
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
           VERSION=$(jq -r .SemVersion "$GITHUB_WORKSPACE/LiveMap/Mod/LiveMap/LiveMap.uplugin")
-          TAG="v${VERSION}-build.${GITHUB_RUN_NUMBER}"
-          for f in *.zip; do mv "$f" "${f%.zip}-${VERSION}-build.${GITHUB_RUN_NUMBER}.zip"; done
+          SUFFIX="${VERSION}-build.${GITHUB_RUN_NUMBER}"
+          TAG="v${SUFFIX}"
+          for f in *.zip; do mv "$f" "${f%.zip}-${SUFFIX}.zip"; done
+          (cd "$WORK/web-dist" && zip -qr "$OLDPWD/LiveMap-Web-${SUFFIX}.zip" .)
+          cat > notes.md << EOF
+          ## Install
+
+          1. Install [SML](https://ficsit.app/mod/SML) 3.12+ (Satisfactory Mod Manager does this for you).
+          2. Extract \`LiveMap-Windows-${SUFFIX}.zip\` into \`<Satisfactory>\\FactoryGame\\Mods\\LiveMap\\\` so \`LiveMap.uplugin\` is directly inside that folder.
+          3. Load a save, extract \`LiveMap-Web-${SUFFIX}.zip\`, serve it (\`npx serve -l 5173 .\`) and open http://localhost:5173.
+
+          Full guide: [docs/INSTALL.md](https://github.com/${GITHUB_REPOSITORY}/blob/${GITHUB_SHA}/docs/INSTALL.md). Steam version only for now.
+
+          EOF
           gh release create "$TAG" *.zip \
             --repo "$GITHUB_REPOSITORY" --target "$GITHUB_SHA" \
             --title "Live Map ${VERSION} (build ${GITHUB_RUN_NUMBER})" \
-            --generate-notes --latest
+            --notes-file notes.md --generate-notes --latest

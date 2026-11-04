@@ -7,6 +7,13 @@ Status: works in-game (Satisfactory 1.2, SML 3.12) for players, trains,
 vehicles and rails. Buildings, belts, pipes, hypertubes and power lines are
 tested end to end against the sim but not yet in a real save. See [Testing](#testing).
 
+## Install
+
+Download the mod and the map page from the latest
+[release](https://github.com/TheTrollGod/Satisfactory-LiveMap/releases) and follow
+[docs/INSTALL.md](docs/INSTALL.md). Every push to `main` that passes the tests
+publishes a new release.
+
 ## Decision: build from scratch, use FRM as a reference
 
 See [docs/DECISION.md](docs/DECISION.md). Short version:

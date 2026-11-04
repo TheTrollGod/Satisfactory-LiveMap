@@ -60,7 +60,21 @@ Each mod zip holds the plugin root: `LiveMap.uplugin`, `Binaries/<platform>/`,
 
 Stop the server before installing or updating. The mod is loaded at startup only.
 
-### 3.1 Linux dedicated server (script)
+### 3.1 Install scripts
+
+Two scripts install the right zip automatically by inspecting the install folder:
+
+| Found in the install folder | Detected as | Zip installed |
+|---|---|---|
+| `FactoryServer.sh` or `FactoryGame/Binaries/Linux/` | Linux dedicated server | `LiveMap-LinuxServer` |
+| `FactoryServer.exe` | Windows dedicated server | `LiveMap-WindowsServer` |
+| `FactoryGame*.exe` | Game client (Windows, or Linux via Proton) | `LiveMap-Windows` |
+
+`install.sh` (bash) works on Linux, and on Windows from Git Bash or WSL.
+`install.ps1` is the Windows PowerShell equivalent (section 3.3). Both accept an
+explicit target to skip detection.
+
+#### Linux (bash)
 
 Run as the account that owns the server files (commonly `steam`), not root, from
 the server's install directory (the one containing `FactoryGame/`):
@@ -81,11 +95,12 @@ bash install.sh
 
 What it does:
 
-1. Resolves the server directory: the argument if given, otherwise the current
+1. Resolves the install directory: the argument if given, otherwise the current
    directory, otherwise common locations (`~/SatisfactoryDedicatedServer`, Steam
    library paths, `/home/steam/...`, `/opt/satisfactory`, `/config/gamefiles` for
    the common Docker image). Fails if no `FactoryGame/` is found.
-2. Queries the GitHub Releases API and downloads `LiveMap-LinuxServer-*.zip`.
+2. Detects the target (table above) and downloads the matching zip from the
+   latest GitHub release.
 3. Replaces `FactoryGame/Mods/LiveMap/` with the zip contents.
 4. Warns if `FactoryGame/Mods/SML/` is absent.
 
@@ -94,7 +109,8 @@ Script reference (with the piped form, pass options after `bash -s --`, e.g.
 
 | Option | Effect |
 |---|---|
-| `[SERVER_DIR]` | Install into this directory instead of auto-detecting |
+| `[INSTALL_DIR]` | Install into this directory instead of auto-detecting |
+| `--target T` | Skip detection: `linux-server`, `windows-server` or `windows` |
 | `--version TAG` | Install a specific release tag instead of the latest |
 | `--zip FILE` | Install from a local zip; no download (offline hosts) |
 | `--web DIR` | Also download and extract the frontend into `DIR` |
@@ -113,7 +129,37 @@ unzip /path/to/LiveMap-LinuxServer-<v>.zip -d LiveMap
 test -f LiveMap/LiveMap.uplugin && echo ok
 ```
 
-### 3.3 Windows dedicated server
+### 3.3 Windows: dedicated server or game (PowerShell)
+
+From the install folder (the one containing `FactoryGame\`), with the server or
+game stopped:
+
+```powershell
+cd 'C:\SatisfactoryServer'
+irm https://raw.githubusercontent.com/TheTrollGod/Satisfactory-LiveMap/main/scripts/install.ps1 | iex
+```
+
+It installs `LiveMap-WindowsServer` next to `FactoryServer.exe`, or `LiveMap-Windows`
+next to a game executable. With options, download it first:
+
+```powershell
+irm https://raw.githubusercontent.com/TheTrollGod/Satisfactory-LiveMap/main/scripts/install.ps1 -OutFile install.ps1
+.\install.ps1 -Path 'C:\SatisfactoryServer' -Version v0.1.0-build.13
+.\install.ps1 -Uninstall
+```
+
+| Parameter | Effect |
+|---|---|
+| `-Path DIR` | Install folder (default: current folder, then common Steam/Epic paths) |
+| `-Target T` | Skip detection: `windows-server` or `windows` |
+| `-Version TAG` | Specific release tag instead of the latest |
+| `-Zip FILE` | Install from a local zip |
+| `-Uninstall` | Remove `FactoryGame\Mods\LiveMap\` |
+
+If script execution is blocked by policy, run the downloaded file with
+`powershell -ExecutionPolicy Bypass -File .\install.ps1`.
+
+Manual install:
 
 ```powershell
 $mods = "C:\SatisfactoryServer\FactoryGame\Mods"
@@ -128,7 +174,9 @@ Extract `LiveMap-Windows-<v>.zip` into `<game install>\FactoryGame\Mods\LiveMap\
 (Steam: `<Steam library>\steamapps\common\Satisfactory`; Epic: the folder chosen at
 install). The zip
 contains both the Steam (`FactoryGameSteam-*`) and Epic (`FactoryGameEGS-*`) binaries;
-the game loads the matching one. The mod starts when the host loads a save.
+the game loads the matching one. The mod starts when the host loads a save. The
+scripts in 3.1 and 3.3 handle this case too, including Linux players running the
+game through Proton.
 
 ## 4. Firewall
 

@@ -1,27 +1,24 @@
 #!/usr/bin/env bash
-# Install or update Live Map on a Linux Satisfactory dedicated server.
+# Install or update Live Map. Run it from the game or server install folder:
 #
-#   wget -qO- https://raw.githubusercontent.com/TheTrollGod/Satisfactory-LiveMap/main/scripts/install.sh | bash -s -- [options] [SERVER_DIR]
+#   wget -qO- https://raw.githubusercontent.com/TheTrollGod/Satisfactory-LiveMap/main/scripts/install.sh | bash
 #
-# SERVER_DIR is the dedicated server's install folder (the one containing
-# FactoryGame/). If left out, a few common locations are tried.
+# It looks at what's installed there and picks the matching release zip:
+#   Linux dedicated server   -> LiveMap-LinuxServer
+#   Windows dedicated server -> LiveMap-WindowsServer   (e.g. from Git Bash or WSL)
+#   Game client              -> LiveMap-Windows         (Windows, or Linux via Proton)
+# On Windows, scripts/install.ps1 does the same from PowerShell.
 #
-# Options:
-#   --version TAG   install a specific release tag (default: latest)
-#   --zip FILE      install from a local LiveMap-LinuxServer zip instead of downloading
-#   --web DIR       also download the map page and extract it into DIR
-#   --uninstall     remove Live Map from the server
-#   -h, --help      show this help
-#
-# Stop the server before installing or updating, and start it again afterwards.
+# Stop the game or server before installing or updating. See --help for options.
 set -euo pipefail
 
 REPO="TheTrollGod/Satisfactory-LiveMap"
 VERSION="latest"
 ZIP=""
 WEB_DIR=""
+TARGET=""
 UNINSTALL=0
-SERVER_DIR=""
+INSTALL_DIR=""
 
 die()  { echo "error: $*" >&2; exit 1; }
 info() { echo "==> $*"; }
@@ -29,36 +26,38 @@ warn() { echo "warning: $*" >&2; }
 
 usage() {
   cat << 'EOF'
-Install or update Live Map on a Linux Satisfactory dedicated server.
+Install or update Live Map on a Satisfactory dedicated server or game install.
 
-Usage: install.sh [options] [SERVER_DIR]
+Usage: install.sh [options] [INSTALL_DIR]
 
-SERVER_DIR is the server's install folder (the one containing FactoryGame/).
-If left out, a few common locations are tried.
+INSTALL_DIR is the game or server install folder (the one containing
+FactoryGame/). Defaults to the current folder, then a few common locations.
 
 Options:
+  --target T      skip detection: linux-server, windows-server or windows
   --version TAG   install a specific release tag (default: latest)
-  --zip FILE      install from a local LiveMap-LinuxServer zip instead of downloading
+  --zip FILE      install from a local zip instead of downloading
   --web DIR       also download the map page and extract it into DIR
-  --uninstall     remove Live Map from the server
+  --uninstall     remove Live Map
   -h, --help      show this help
 EOF
 }
 
 while [ $# -gt 0 ]; do
   case "$1" in
+    --target)    TARGET="${2:?--target needs a value}"; shift 2 ;;
     --version)   VERSION="${2:?--version needs a tag}"; shift 2 ;;
     --zip)       ZIP="${2:?--zip needs a file}"; shift 2 ;;
     --web)       WEB_DIR="${2:?--web needs a directory}"; shift 2 ;;
     --uninstall) UNINSTALL=1; shift ;;
     -h|--help)   usage; exit 0 ;;
     -*)          die "unknown option: $1 (see --help)" ;;
-    *)           SERVER_DIR="$1"; shift ;;
+    *)           INSTALL_DIR="$1"; shift ;;
   esac
 done
 
-# ---- find the server ----
-if [ -z "$SERVER_DIR" ]; then
+# ---- find the install ----
+if [ -z "$INSTALL_DIR" ]; then
   for d in \
     "$PWD" \
     "$HOME/SatisfactoryDedicatedServer" \
@@ -67,15 +66,41 @@ if [ -z "$SERVER_DIR" ]; then
     "/home/steam/SatisfactoryDedicatedServer" \
     "/home/steam/.steam/steam/steamapps/common/SatisfactoryDedicatedServer" \
     "/opt/satisfactory" \
-    "/config/gamefiles"; do
-    if [ -d "$d/FactoryGame" ]; then SERVER_DIR="$d"; break; fi
+    "/config/gamefiles" \
+    "$HOME/.steam/steam/steamapps/common/Satisfactory" \
+    "$HOME/.local/share/Steam/steamapps/common/Satisfactory"; do
+    if [ -d "$d/FactoryGame" ]; then INSTALL_DIR="$d"; break; fi
   done
-  [ -n "$SERVER_DIR" ] || die "couldn't find the server. Pass its folder (the one containing FactoryGame/) as an argument."
+  [ -n "$INSTALL_DIR" ] || die "couldn't find Satisfactory. Run this from the install folder (the one containing FactoryGame/), or pass it as an argument."
 fi
-[ -d "$SERVER_DIR/FactoryGame" ] || die "$SERVER_DIR has no FactoryGame/ folder; is that the dedicated server's install folder?"
-MODS="$SERVER_DIR/FactoryGame/Mods"
+[ -d "$INSTALL_DIR/FactoryGame" ] || die "$INSTALL_DIR has no FactoryGame/ folder; is that the game or server install folder?"
+MODS="$INSTALL_DIR/FactoryGame/Mods"
 DEST="$MODS/LiveMap"
-info "Server: $SERVER_DIR"
+
+# ---- work out which build it needs ----
+detect_target() {
+  local d="$1"
+  if [ -f "$d/FactoryServer.sh" ] || [ -d "$d/FactoryGame/Binaries/Linux" ]; then echo linux-server
+  elif [ -f "$d/FactoryServer.exe" ]; then echo windows-server
+  elif ls "$d"/FactoryGame*.exe >/dev/null 2>&1 || [ -d "$d/FactoryGame/Binaries/Win64" ]; then echo windows
+  else
+    case "$(uname -s)" in
+      Linux) echo linux-server ;;
+      *)     echo "" ;;
+    esac
+  fi
+}
+if [ -z "$TARGET" ]; then
+  TARGET="$(detect_target "$INSTALL_DIR")"
+  [ -n "$TARGET" ] || die "couldn't tell what's installed in $INSTALL_DIR; pass --target linux-server, windows-server or windows"
+fi
+case "$TARGET" in
+  linux-server)   ASSET_NAME=LiveMap-LinuxServer;   BIN_HINT=Linux;  KIND="Linux dedicated server" ;;
+  windows-server) ASSET_NAME=LiveMap-WindowsServer; BIN_HINT=Win64;  KIND="Windows dedicated server" ;;
+  windows)        ASSET_NAME=LiveMap-Windows;       BIN_HINT=Win64;  KIND="game client (Windows build)" ;;
+  *) die "unknown --target '$TARGET' (use linux-server, windows-server or windows)" ;;
+esac
+info "Install: $INSTALL_DIR ($KIND)"
 
 if [ "$UNINSTALL" = 1 ]; then
   if [ -d "$DEST" ]; then rm -rf "$DEST"; info "Removed $DEST"; else info "Live Map isn't installed."; fi
@@ -112,12 +137,12 @@ if [ -z "$ZIP" ] || [ -n "$WEB_DIR" ]; then
     || die "couldn't read release '$VERSION' from GitHub"
   [ -n "$ASSETS" ] || die "release '$VERSION' has no files"
 fi
-asset() { echo "$ASSETS" | grep "/$1-[^/]*\.zip$" | head -n1; }
+asset() { echo "$ASSETS" | grep "/$1-[0-9][^/]*\.zip$" | head -n1; }
 
 # ---- install the mod ----
 if [ -z "$ZIP" ]; then
-  URL="$(asset LiveMap-LinuxServer)"
-  [ -n "$URL" ] || die "release '$VERSION' has no LiveMap-LinuxServer zip"
+  URL="$(asset "$ASSET_NAME")"
+  [ -n "$URL" ] || die "release '$VERSION' has no $ASSET_NAME zip"
   info "Downloading $(basename "$URL")"
   ZIP="$TMP/livemap.zip"
   fetch "$URL" "$ZIP"
@@ -130,8 +155,8 @@ unzip_to "$ZIP" "$TMP/mod"
 UPLUGIN="$(find "$TMP/mod" -maxdepth 2 -name LiveMap.uplugin | head -n1)"
 [ -n "$UPLUGIN" ] || die "that zip doesn't contain LiveMap.uplugin"
 SRC="$(dirname "$UPLUGIN")"
-if [ -d "$SRC/Binaries" ] && ! find "$SRC/Binaries" -path '*Linux*' -print -quit | grep -q .; then
-  warn "this zip has no Linux binaries; did you mean the LiveMap-LinuxServer zip?"
+if [ -d "$SRC/Binaries" ] && [ ! -d "$SRC/Binaries/$BIN_HINT" ]; then
+  warn "this zip has no $BIN_HINT binaries, but this looks like a $KIND (expected $ASSET_NAME)"
 fi
 
 mkdir -p "$MODS"
@@ -140,7 +165,7 @@ cp -r "$SRC" "$DEST"
 info "Installed Live Map to $DEST"
 
 if [ ! -d "$MODS/SML" ]; then
-  warn "SML isn't installed on this server ($MODS/SML is missing). Live Map won't load without it."
+  warn "SML isn't installed here ($MODS/SML is missing). Live Map won't load without it."
   warn "Install it with Satisfactory Mod Manager or ficsit-cli: https://docs.ficsit.app"
 fi
 
@@ -153,8 +178,7 @@ if [ -n "$WEB_DIR" ]; then
   mkdir -p "$WEB_DIR"
   unzip_to "$TMP/web.zip" "$WEB_DIR"
   info "Map page extracted to $WEB_DIR"
-  echo "    Serve it with:  cd '$WEB_DIR' && python3 -m http.server 5173"
 fi
 
 echo
-info "Done. Start the server, open TCP port 8086, then browse to http://<server-ip>:8086/"
+info "Done. Start the world, allow TCP port 8086 through the firewall, then browse to http://<host>:8086/"

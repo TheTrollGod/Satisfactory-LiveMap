@@ -277,7 +277,7 @@ jobs:
           2. Pick the zip for where the world runs: \`LiveMap-Windows\` (hosting from the game), \`LiveMap-WindowsServer\` or \`LiveMap-LinuxServer\` (dedicated server). Extract it into \`<game or server>/FactoryGame/Mods/LiveMap/\` so \`LiveMap.uplugin\` is directly inside that folder.
           3. Start the world and open \`http://<host>:8086/\` in a browser. The map page is built into the mod. (\`LiveMap-Web\` is only needed to host the page somewhere else.)
 
-          Linux server: \`cd\` into the server folder and run \`wget -qO- https://raw.githubusercontent.com/${GITHUB_REPOSITORY}/main/scripts/install.sh | bash\`.
+          Or let a script pick the right zip. From the game or server folder, on Linux: \`wget -qO- https://raw.githubusercontent.com/${GITHUB_REPOSITORY}/main/scripts/install.sh | bash\`, on Windows (PowerShell): \`irm https://raw.githubusercontent.com/${GITHUB_REPOSITORY}/main/scripts/install.ps1 | iex\`.
 
           Full guide: [docs/INSTALL.md](https://github.com/${GITHUB_REPOSITORY}/blob/${GITHUB_SHA}/docs/INSTALL.md).
 

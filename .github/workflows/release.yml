@@ -15,8 +15,18 @@
 name: Release
 
 on:
-  push:              # every branch runs the checks; only main packages and releases
+  # Every branch runs the checks; only main packages and releases.
+  # Pushes that only touch docs or Markdown files skip the workflow entirely.
+  push:
+    paths-ignore:
+      - "docs/**"
+      - "**/*.md"
+      - "LICENSE*"
   pull_request:
+    paths-ignore:
+      - "docs/**"
+      - "**/*.md"
+      - "LICENSE*"
   workflow_dispatch:
 
 # A newer push to main replaces an older build still in progress.

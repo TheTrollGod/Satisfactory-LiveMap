@@ -4,7 +4,8 @@
 # The mod build follows SML's own CI (satisfactorymodding/SatisfactoryModLoader,
 # .github/workflows/build.yml): Coffee Stain's Linux editor build from
 # satisfactorymodding/UnrealEngine, MSVC under Wine for the Win64 target, and
-# wwise-cli for the Wwise integration. Everything runs on GitHub-hosted runners.
+# wwise-cli for the Wwise integration. Tests run on GitHub-hosted runners; the
+# mod is packaged on a self-hosted VM that keeps its build state between runs.
 #
 # Required repository secrets (Settings > Secrets and variables > Actions):
 #   UE_TOKEN        classic PAT (scope: repo) from an account that can read
@@ -118,15 +119,17 @@ jobs:
 
   package-and-release:
     needs: [core-tests, web-and-e2e]
-    # Only pushes to main release. PRs never get the secrets or the release.
+    # Only pushes to main release. PRs never get the secrets, the release, or this runner.
     if: github.event_name != 'pull_request' && github.ref == 'refs/heads/main'
-    runs-on: ubuntu-24.04
+    # Self-hosted VM (see scripts/runner/setup-runner.sh). Everything under WORK
+    # persists between runs, so after the first build only Live Map recompiles.
+    runs-on: [self-hosted, livemap]
     timeout-minutes: 360
     permissions:
       contents: write
     env:
-      WORK: /mnt/work          # the big temp disk; / is too small for the engine
-      CACHE: /mnt/cache
+      WORK: /srv/livemap
+      CACHE: /srv/livemap/cache
     steps:
       - name: Check secrets
         env:
@@ -137,85 +140,48 @@ jobs:
             echo "::error::Set the UE_TOKEN, WWISE_EMAIL and WWISE_PASSWORD repository secrets (see the top of release.yml)."
             exit 1
           fi
-
-      - name: Free disk space
-        uses: jlumbroso/free-disk-space@v1.3.1
-        with:
-          tool-cache: true
-          large-packages: false
-
-      - name: Prepare work dirs
-        run: |
-          sudo mkdir -p "$WORK" "$CACHE"
-          sudo chown -R "$USER" "$WORK" "$CACHE"
-          df -h / /mnt
-
-      - name: Dependencies
-        run: sudo apt-get update && sudo apt-get install -y wget build-essential zstd dos2unix jq msitools perl
+          mkdir -p "$CACHE"
+          df -h "$WORK"
 
       # ---------- Wine (built from source with the typelib patch, like SML) ----------
-      - name: Restore Wine build
-        id: wine-cache
-        uses: actions/cache/restore@v4
-        with:
-          path: ${{ env.CACHE }}/wine
-          key: wine-${{ env.WINE_VERSION }}-mr9640-${{ runner.os }}
-
-      - name: Wine build and runtime libraries
+      - name: Wine
         run: |
-          sudo apt-get install -y gcc-multilib gcc-mingw-w64 libasound2-dev bluez libpulse-dev libdbus-1-dev libfontconfig-dev libfreetype-dev libgnutls28-dev libgl-dev libunwind-dev libx11-dev libxcomposite-dev libxcursor-dev libxfixes-dev libxi-dev libxrandr-dev libxrender-dev libxext-dev libwayland-bin libwayland-dev libegl-dev libxkbcommon-dev libxkbregistry-dev libgstreamer1.0-dev libgstreamer-plugins-base1.0-dev libosmesa6-dev libsdl2-dev libudev-dev libvulkan-dev flex bison
-
-      - name: Build Wine
-        if: steps.wine-cache.outputs.cache-hit != 'true'
-        run: |
-          wget -O "$RUNNER_TEMP/wine_typelib.patch" https://gitlab.winehq.org/wine/wine/-/merge_requests/9640.patch
-          git clone --depth 1 -b "wine-$WINE_VERSION" https://gitlab.winehq.org/wine/wine.git "$CACHE/wine-src"
-          cd "$CACHE/wine-src"
-          git -c user.email=ci@example.com -c user.name=CI am "$RUNNER_TEMP/wine_typelib.patch"
-          mkdir build && cd build
-          ../configure --enable-archs=x86_64,i386 --without-tests --prefix="$CACHE/wine"
-          make -j"$(nproc)"
-          make install
-          rm -rf "$CACHE/wine-src"
-
-      # Saved right away (not at job end) so a later failure doesn't throw away the hour this takes.
-      - name: Save Wine build
-        if: steps.wine-cache.outputs.cache-hit != 'true'
-        uses: actions/cache/save@v4
-        with:
-          path: ${{ env.CACHE }}/wine
-          key: ${{ steps.wine-cache.outputs.cache-primary-key }}
-
-      - name: Set up Wine
-        run: |
-          echo "$CACHE/wine/bin" >> "$GITHUB_PATH"
-          export PATH="$CACHE/wine/bin:$PATH"
-          export WINEPREFIX="$RUNNER_TEMP/.wine"
+          if [ ! -x "$CACHE/wine-$WINE_VERSION/bin/wine" ]; then
+            rm -rf "$CACHE/wine-src"
+            wget -q -O "$CACHE/wine_typelib.patch" https://gitlab.winehq.org/wine/wine/-/merge_requests/9640.patch
+            git clone -q --depth 1 -b "wine-$WINE_VERSION" https://gitlab.winehq.org/wine/wine.git "$CACHE/wine-src"
+            cd "$CACHE/wine-src"
+            git -c user.email=ci@example.com -c user.name=CI am -q "$CACHE/wine_typelib.patch"
+            mkdir build && cd build
+            ../configure -q --enable-archs=x86_64,i386 --without-tests --prefix="$CACHE/wine-$WINE_VERSION"
+            make -s -j"$(nproc)"
+            make -s install
+            rm -rf "$CACHE/wine-src"
+          fi
+          echo "$CACHE/wine-$WINE_VERSION/bin" >> "$GITHUB_PATH"
+          export PATH="$CACHE/wine-$WINE_VERSION/bin:$PATH"
+          export WINEPREFIX="$WORK/wineprefix"
           echo "WINEPREFIX=$WINEPREFIX" >> "$GITHUB_ENV"
           echo "WINEDEBUG=-all" >> "$GITHUB_ENV"
-          mkdir -p "$WINEPREFIX"
-          WINEDLLOVERRIDES="mscoree,mshtml=" wineboot -u
-          wineserver -w
+          if [ ! -f "$WINEPREFIX/system.reg" ]; then
+            mkdir -p "$WINEPREFIX"
+            WINEDLLOVERRIDES="mscoree,mshtml=" wineboot -u
+            wineserver -w
+          fi
 
       # ---------- MSVC 14.38 under Wine ----------
-      - name: Restore MSVC
-        id: msvc-cache
-        uses: actions/cache/restore@v4
-        with:
-          path: ${{ env.CACHE }}/msvc
-          key: msvc-17.8-sdk22621-${{ runner.os }}-v1
-
-      - name: Set up MSVC
+      - name: MSVC
         run: |
-          git clone -b ue-patches https://github.com/mircearoata/msvc-wine.git "$RUNNER_TEMP/msvc-wine"
+          [ -d "$CACHE/msvc-wine" ] || git clone -q -b ue-patches https://github.com/mircearoata/msvc-wine.git "$CACHE/msvc-wine"
           MSVC_DIR="$CACHE/msvc"
           if [ ! -f "$MSVC_DIR/.installed" ]; then
-            "$RUNNER_TEMP/msvc-wine/vsdownload.py" --dest "$MSVC_DIR" --cache "$RUNNER_TEMP/msvc-download" \
+            rm -rf "$MSVC_DIR"
+            "$CACHE/msvc-wine/vsdownload.py" --dest "$MSVC_DIR" --cache "$CACHE/msvc-download" \
               --accept-license --channel release.ltsc.17.8 --msvc-version 17.8 --sdk-version 10.0.22621 \
               Microsoft.Net.4.8.SDK Microsoft.VisualStudio.MinShell
-            wget -P "$RUNNER_TEMP/msvc-download" https://github.com/kbandla/installers/releases/latest/download/X64.Debuggers.And.Tools-x64_en-us.msi
-            msiextract -C "$MSVC_DIR" "$RUNNER_TEMP/msvc-download/X64.Debuggers.And.Tools-x64_en-us.msi" > /dev/null
-            "$RUNNER_TEMP/msvc-wine/install.sh" "$MSVC_DIR"
+            wget -q -nc -P "$CACHE/msvc-download" https://github.com/kbandla/installers/releases/latest/download/X64.Debuggers.And.Tools-x64_en-us.msi
+            msiextract -C "$MSVC_DIR" "$CACHE/msvc-download/X64.Debuggers.And.Tools-x64_en-us.msi" > /dev/null
+            "$CACHE/msvc-wine/install.sh" "$MSVC_DIR"
             cat > "$MSVC_DIR/bin/x64/pdbcopy" << 'EOF'
           #!/usr/bin/env bash
           . "$(dirname "$0")"/msvcenv.sh
@@ -225,60 +191,67 @@ jobs:
             ln -sf ./pdbcopy "$MSVC_DIR/bin/x64/pdbcopy.exe"
             chmod +x "$MSVC_DIR"/bin/x64/pdbcopy*
             touch "$MSVC_DIR/.installed"
-            rm -rf "$RUNNER_TEMP/msvc-download"
+            rm -rf "$CACHE/msvc-download"
           fi
           echo "UE_WINE_MSVC=$(realpath "$MSVC_DIR")" >> "$GITHUB_ENV"
 
-      - name: Save MSVC
-        if: steps.msvc-cache.outputs.cache-hit != 'true'
-        uses: actions/cache/save@v4
-        with:
-          path: ${{ env.CACHE }}/msvc
-          key: ${{ steps.msvc-cache.outputs.cache-primary-key }}
-
-      # ---------- SML Starter Project + this mod ----------
-      - uses: actions/checkout@v6
-        with:
-          path: LiveMap
-
-      - name: Check out SML and add LiveMap
-        run: |
-          git clone --filter=blob:none https://github.com/satisfactorymodding/SatisfactoryModLoader.git "$WORK/SML"
-          git -C "$WORK/SML" checkout "$SML_REF"
-          cp -r "$GITHUB_WORKSPACE/LiveMap/Mod/LiveMap" "$WORK/SML/Mods/LiveMap"
-
-      - uses: actions/download-artifact@v5
-        with:
-          name: web-dist
-          path: ${{ env.WORK }}/web-dist
-
-      - name: Embed the map page in the mod
-        run: node "$GITHUB_WORKSPACE/LiveMap/scripts/embed-web.mjs" "$WORK/web-dist" "$WORK/SML/Mods/LiveMap/Source/LiveMap/Private/Core/WebAssets.inc"
-
-      - name: Download and set up Unreal Engine
-        working-directory: ${{ env.WORK }}
+      # ---------- Unreal Engine (downloaded once per UE_RELEASE) ----------
+      - name: Unreal Engine
         env:
           GH_TOKEN: ${{ secrets.UE_TOKEN }}
         run: |
-          mkdir -p ue && cd ue
-          gh release download "$UE_RELEASE" --repo satisfactorymodding/UnrealEngine -p "UnrealEngine-CSS-Editor-Linux.tar.zst.*"
-          cat UnrealEngine-CSS-Editor-Linux.tar.zst.* | zstd -d | tar -xf -
-          rm UnrealEngine-CSS-Editor-Linux.tar.zst.*
-          ./Engine/Binaries/Linux/UnrealVersionSelector -register
-          df -h /mnt
+          if [ "$(cat "$WORK/ue/.release" 2>/dev/null)" != "$UE_RELEASE" ]; then
+            rm -rf "$WORK/ue" && mkdir -p "$WORK/ue" && cd "$WORK/ue"
+            gh release download "$UE_RELEASE" --repo satisfactorymodding/UnrealEngine -p "UnrealEngine-CSS-Editor-Linux.tar.zst.*"
+            cat UnrealEngine-CSS-Editor-Linux.tar.zst.* | zstd -d | tar -xf -
+            rm UnrealEngine-CSS-Editor-Linux.tar.zst.*
+            echo "$UE_RELEASE" > .release
+          fi
+          "$WORK/ue/Engine/Binaries/Linux/UnrealVersionSelector" -register
 
-      - name: Download and integrate Wwise
-        working-directory: ${{ env.WORK }}
+      # ---------- SML Starter Project (kept between runs; intermediates are reused) ----------
+      - name: SML Starter Project
         env:
           GH_TOKEN: ${{ secrets.UE_TOKEN }}
           WWISE_EMAIL: ${{ secrets.WWISE_EMAIL }}
           WWISE_PASSWORD: ${{ secrets.WWISE_PASSWORD }}
         run: |
-          gh release download --repo mircearoata/wwise-cli -p wwise-cli_linux_amd64 -O wwise-cli
-          chmod +x ./wwise-cli
-          # stdout discarded so signed download URLs don't end up in the log
-          ./wwise-cli download --sdk-version "$WWISE_SDK" --filter Packages=SDK --filter DeploymentPlatforms=Windows_vc160 --filter DeploymentPlatforms=Windows_vc170 --filter DeploymentPlatforms=Linux --filter DeploymentPlatforms= >/dev/null
-          ./wwise-cli integrate-ue --integration-version "$WWISE_INTEGRATION" --project "$WORK/SML/FactoryGame.uproject" >/dev/null
+          STAMP="$SML_REF-$UE_RELEASE-$WWISE_INTEGRATION"
+          if [ "$(cat "$WORK/SML/.livemap-stamp" 2>/dev/null)" != "$STAMP" ]; then
+            if [ ! -d "$WORK/SML/.git" ]; then
+              git clone -q --filter=blob:none https://github.com/satisfactorymodding/SatisfactoryModLoader.git "$WORK/SML"
+            fi
+            git -C "$WORK/SML" fetch -q origin
+            git -C "$WORK/SML" checkout -q --force "$SML_REF"
+            cd "$WORK"
+            [ -x ./wwise-cli ] || { gh release download --repo mircearoata/wwise-cli -p wwise-cli_linux_amd64 -O wwise-cli; chmod +x ./wwise-cli; }
+            # stdout discarded so signed download URLs don't end up in the log
+            ./wwise-cli download --sdk-version "$WWISE_SDK" --filter Packages=SDK --filter DeploymentPlatforms=Windows_vc160 --filter DeploymentPlatforms=Windows_vc170 --filter DeploymentPlatforms=Linux --filter DeploymentPlatforms= >/dev/null
+            ./wwise-cli integrate-ue --integration-version "$WWISE_INTEGRATION" --project "$WORK/SML/FactoryGame.uproject" >/dev/null
+            echo "$STAMP" > "$WORK/SML/.livemap-stamp"
+          fi
+
+      - uses: actions/checkout@v6
+        with:
+          path: LiveMap
+
+      - uses: actions/download-artifact@v5
+        with:
+          name: web-dist
+          path: ${{ runner.temp }}/web-dist
+
+      - name: Update LiveMap in the project
+        run: |
+          DEST="$WORK/SML/Mods/LiveMap"
+          mkdir -p "$DEST"
+          # Content-compared, without copying timestamps, so unchanged files keep
+          # their old mtimes and UBT only recompiles what actually changed.
+          rsync -rl --checksum --delete --exclude Binaries/ --exclude Intermediate/ \
+            --exclude Source/LiveMap/Private/Core/WebAssets.inc \
+            "$GITHUB_WORKSPACE/LiveMap/Mod/LiveMap/" "$DEST/"
+          INC="$DEST/Source/LiveMap/Private/Core/WebAssets.inc"
+          node "$GITHUB_WORKSPACE/LiveMap/scripts/embed-web.mjs" "$RUNNER_TEMP/web-dist" "$RUNNER_TEMP/WebAssets.inc"
+          cmp -s "$RUNNER_TEMP/WebAssets.inc" "$INC" || cp "$RUNNER_TEMP/WebAssets.inc" "$INC"
 
       - name: Build Development Editor
         run: |
@@ -287,6 +260,7 @@ jobs:
       - name: Package LiveMap (Alpakit PackagePlugin)
         run: |
           ulimit -n 1048576 || ulimit -n "$(ulimit -Hn)"
+          rm -rf "$WORK/SML/Saved/ArchivedPlugins/LiveMap"
           "$WORK/ue/Engine/Build/BatchFiles/RunUAT.sh" -ScriptsForProject="$WORK/SML/FactoryGame.uproject" PackagePlugin \
             -Project="$WORK/SML/FactoryGame.uproject" -dlcname=LiveMap -build \
             -clientconfig=Shipping -serverconfig=Shipping -platform=Win64 \
@@ -302,8 +276,8 @@ jobs:
           SUFFIX="${VERSION}-build.${GITHUB_RUN_NUMBER}"
           TAG="v${SUFFIX}"
           for f in *.zip; do mv "$f" "${f%.zip}-${SUFFIX}.zip"; done
-          (cd "$WORK/web-dist" && zip -qr "$OLDPWD/LiveMap-Web-${SUFFIX}.zip" .)
-          cat > notes.md << EOF
+          (cd "$RUNNER_TEMP/web-dist" && zip -qr "$OLDPWD/LiveMap-Web-${SUFFIX}.zip" .)
+          cat > "$RUNNER_TEMP/notes.md" << EOF
           ## Install
 
           1. Install [SML](https://ficsit.app/mod/SML) 3.12+ (Satisfactory Mod Manager does this for you).
@@ -318,4 +292,4 @@ jobs:
           gh release create "$TAG" *.zip \
             --repo "$GITHUB_REPOSITORY" --target "$GITHUB_SHA" \
             --title "Live Map ${VERSION} (build ${GITHUB_RUN_NUMBER})" \
-            --notes-file notes.md --generate-notes --latest
+            --notes-file "$RUNNER_TEMP/notes.md" --generate-notes --latest

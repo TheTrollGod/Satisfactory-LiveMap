@@ -53,30 +53,48 @@ install mods on a server (local folder or SFTP), or use
 
 #### Linux: install script
 
-Stop the server, then run this on it. Replace the path with your server's install
-folder (the one that contains `FactoryGame/`):
+1. Stop the server.
+2. Log in as the user that owns the server files (often `steam`), not root.
+3. Go into the server's install folder, the one that contains `FactoryGame/`.
+   Yours may be named differently:
 
-```bash
-wget -qO- https://raw.githubusercontent.com/TheTrollGod/Satisfactory-LiveMap/main/scripts/install.sh | bash -s -- ~/SatisfactoryDedicatedServer
-```
+   ```bash
+   cd ~/SatisfactoryServer
+   ```
+
+4. Run the script:
+
+   ```bash
+   wget -qO- https://raw.githubusercontent.com/TheTrollGod/Satisfactory-LiveMap/main/scripts/install.sh | bash
+   ```
+
+   You should see `Installed Live Map to .../FactoryGame/Mods/LiveMap`. If it warns
+   that SML is missing, install SML before starting the server.
+
+5. Start the server and check it with `curl http://localhost:8086/health`.
+
+To update later, stop the server, `cd` into the same folder, and run the same command.
 
 If you'd rather read the script before running it:
 
 ```bash
+cd ~/SatisfactoryServer
 wget https://raw.githubusercontent.com/TheTrollGod/Satisfactory-LiveMap/main/scripts/install.sh
 less install.sh
-bash install.sh ~/SatisfactoryDedicatedServer
+bash install.sh
 ```
 
-Leave out the path and it tries the usual locations. Run it again to update. Other options:
+More options, run from the server folder (with the piped form, put them after
+`bash -s --`, for example `| bash -s -- --uninstall`):
 
 ```bash
-bash install.sh --web ~/livemap-web ~/SatisfactoryDedicatedServer   # also fetch the map page
-bash install.sh --version v0.1.0-build.12 ~/SatisfactoryDedicatedServer   # a specific release
-bash install.sh --uninstall ~/SatisfactoryDedicatedServer
+bash install.sh --web ~/livemap-web            # also fetch the map page into ~/livemap-web
+bash install.sh --version v0.1.0-build.12      # install a specific release
+bash install.sh --uninstall                    # remove Live Map
 ```
 
-Run it as the user that owns the server files (often `steam`), not as root.
+If you run it from somewhere else, it looks in a few common server locations, or you
+can pass the folder at the end: `bash install.sh /path/to/server`.
 
 #### By hand
 

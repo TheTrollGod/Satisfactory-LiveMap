@@ -146,7 +146,7 @@ jobs:
             cd "$CACHE/wine-src"
             git -c user.email=ci@example.com -c user.name=CI am -q "$CACHE/wine_typelib.patch"
             mkdir build && cd build
-            ../configure -q --enable-archs=x86_64,i386 --without-tests --prefix="$CACHE/wine-$WINE_VERSION"
+            ../configure -q --enable-archs=x86_64,i386 --disable-tests --prefix="$CACHE/wine-$WINE_VERSION"
             make -s -j"$(nproc)"
             make -s install
             rm -rf "$CACHE/wine-src"

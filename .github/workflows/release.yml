@@ -1,0 +1,253 @@
+# On every push to main: run the checks, and if they all pass, build the mod
+# with Alpakit's packaging command and publish it as a GitHub Release.
+#
+# The mod build follows SML's own CI (satisfactorymodding/SatisfactoryModLoader,
+# .github/workflows/build.yml): Coffee Stain's Linux editor build from
+# satisfactorymodding/UnrealEngine, MSVC under Wine for the Win64 target, and
+# wwise-cli for the Wwise integration. Everything runs on GitHub-hosted runners.
+#
+# Required repository secrets (Settings > Secrets and variables > Actions):
+#   UE_TOKEN        classic PAT (scope: repo) from an account that can read
+#                   satisfactorymodding/UnrealEngine releases
+#   WWISE_EMAIL     Audiokinetic account email
+#   WWISE_PASSWORD  Audiokinetic account password
+
+name: Release
+
+on:
+  push:              # every branch runs the checks; only main packages and releases
+  pull_request:
+  workflow_dispatch:
+
+# A newer push to main replaces an older build still in progress.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  # Pin these together: the engine, SML and Wwise versions must match.
+  # Bump them when you move the local Starter Project to a new SML release.
+  UE_RELEASE: 5.6.1-css-83
+  SML_REF: 8eebc9e659          # v3.12.0 + headers for CL513885
+  WWISE_SDK: 2025.1.6.9117
+  WWISE_INTEGRATION: 2025.1.6.4248
+  WINE_VERSION: "11.0"
+  PLAYWRIGHT_VERSION: 1.48.2
+
+jobs:
+  core-tests:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - name: Build core
+        run: cmake -S tests/core -B build/core -DCMAKE_BUILD_TYPE=Release && cmake --build build/core -j"$(nproc)"
+      - name: Unit and integration tests
+        run: ctest --test-dir build/core --output-on-failure
+      - name: Tests under ThreadSanitizer
+        run: |
+          cmake -S tests/core -B build/tsan -DSANITIZE=thread && cmake --build build/tsan -j"$(nproc)"
+          TSAN_OPTIONS=suppressions=$PWD/tests/core/tsan.supp ./build/tsan/test_server
+      - uses: actions/upload-artifact@v4
+        with:
+          name: livemap-sim
+          path: build/core/livemap_sim
+          retention-days: 1
+
+  web-and-e2e:
+    needs: core-tests
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: web/package-lock.json
+      - name: Build frontend
+        working-directory: web
+        run: npm ci && npm run build
+      - uses: actions/download-artifact@v4
+        with:
+          name: livemap-sim
+          path: build/core
+      - name: Install Playwright
+        run: |
+          npm i -g playwright@${PLAYWRIGHT_VERSION}
+          npx -y playwright@${PLAYWRIGHT_VERSION} install --with-deps chromium
+      - name: End-to-end test
+        run: |
+          chmod +x build/core/livemap_sim
+          (cd web && npx vite preview --port 4173 --strictPort &)
+          npx -y wait-on@8.0.1 -t 30000 http://127.0.0.1:4173/
+          NODE_PATH="$(npm root -g)" node tests/e2e/e2e.mjs "$PWD/build/core/livemap_sim" http://127.0.0.1:4173/ e2e.png
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: e2e-screenshot
+          path: e2e.png
+          if-no-files-found: ignore
+
+  package-and-release:
+    needs: [core-tests, web-and-e2e]
+    # Only pushes to main release. PRs never get the secrets or the release.
+    if: github.event_name != 'pull_request' && github.ref == 'refs/heads/main'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 360
+    permissions:
+      contents: write
+    env:
+      WORK: /mnt/work          # the big temp disk; / is too small for the engine
+      CACHE: /mnt/cache
+    steps:
+      - name: Check secrets
+        env:
+          UE_TOKEN: ${{ secrets.UE_TOKEN }}
+          WWISE_EMAIL: ${{ secrets.WWISE_EMAIL }}
+        run: |
+          if [ -z "$UE_TOKEN" ] || [ -z "$WWISE_EMAIL" ]; then
+            echo "::error::Set the UE_TOKEN, WWISE_EMAIL and WWISE_PASSWORD repository secrets (see the top of release.yml)."
+            exit 1
+          fi
+
+      - name: Free disk space
+        uses: jlumbroso/free-disk-space@v1.3.1
+        with:
+          tool-cache: true
+          large-packages: false
+
+      - name: Prepare work dirs
+        run: |
+          sudo mkdir -p "$WORK" "$CACHE"
+          sudo chown -R "$USER" "$WORK" "$CACHE"
+          df -h / /mnt
+
+      - name: Dependencies
+        run: sudo apt-get update && sudo apt-get install -y wget build-essential zstd dos2unix jq msitools perl
+
+      # ---------- Wine (built from source with the typelib patch, like SML) ----------
+      - name: Restore Wine build
+        id: wine-cache
+        uses: actions/cache@v4
+        with:
+          path: ${{ env.CACHE }}/wine
+          key: wine-${{ env.WINE_VERSION }}-mr9640-${{ runner.os }}
+
+      - name: Wine build and runtime libraries
+        run: |
+          sudo apt-get install -y gcc-multilib gcc-mingw-w64 libasound2-dev bluez libpulse-dev libdbus-1-dev libfontconfig-dev libfreetype-dev libgnutls28-dev libgl-dev libunwind-dev libx11-dev libxcomposite-dev libxcursor-dev libxfixes-dev libxi-dev libxrandr-dev libxrender-dev libxext-dev libwayland-bin libwayland-dev libegl-dev libxkbcommon-dev libxkbregistry-dev libgstreamer1.0-dev libgstreamer-plugins-base1.0-dev libosmesa6-dev libsdl2-dev libudev-dev libvulkan-dev flex bison
+
+      - name: Build Wine
+        if: steps.wine-cache.outputs.cache-hit != 'true'
+        run: |
+          wget -O "$RUNNER_TEMP/wine_typelib.patch" https://gitlab.winehq.org/wine/wine/-/merge_requests/9640.patch
+          git clone --depth 1 -b "wine-$WINE_VERSION" https://gitlab.winehq.org/wine/wine.git "$CACHE/wine-src"
+          cd "$CACHE/wine-src"
+          git -c user.email=ci@example.com -c user.name=CI am "$RUNNER_TEMP/wine_typelib.patch"
+          mkdir build && cd build
+          ../configure --enable-archs=x86_64,i386 --without-tests --prefix="$CACHE/wine"
+          make -j"$(nproc)"
+          make install
+          rm -rf "$CACHE/wine-src"
+
+      - name: Set up Wine
+        run: |
+          echo "$CACHE/wine/bin" >> "$GITHUB_PATH"
+          export PATH="$CACHE/wine/bin:$PATH"
+          export WINEPREFIX="$RUNNER_TEMP/.wine"
+          echo "WINEPREFIX=$WINEPREFIX" >> "$GITHUB_ENV"
+          echo "WINEDEBUG=-all" >> "$GITHUB_ENV"
+          mkdir -p "$WINEPREFIX"
+          WINEDLLOVERRIDES="mscoree,mshtml=" wineboot -u
+          wineserver -w
+
+      # ---------- MSVC 14.38 under Wine ----------
+      - name: Restore MSVC
+        id: msvc-cache
+        uses: actions/cache@v4
+        with:
+          path: ${{ env.CACHE }}/msvc
+          key: msvc-17.8-sdk22621-${{ runner.os }}-v1
+
+      - name: Set up MSVC
+        run: |
+          git clone -b ue-patches https://github.com/mircearoata/msvc-wine.git "$RUNNER_TEMP/msvc-wine"
+          MSVC_DIR="$CACHE/msvc"
+          if [ ! -f "$MSVC_DIR/.installed" ]; then
+            "$RUNNER_TEMP/msvc-wine/vsdownload.py" --dest "$MSVC_DIR" --cache "$RUNNER_TEMP/msvc-download" \
+              --accept-license --channel release.ltsc.17.8 --msvc-version 17.8 --sdk-version 10.0.22621 \
+              Microsoft.Net.4.8.SDK Microsoft.VisualStudio.MinShell
+            wget -P "$RUNNER_TEMP/msvc-download" https://github.com/kbandla/installers/releases/latest/download/X64.Debuggers.And.Tools-x64_en-us.msi
+            msiextract -C "$MSVC_DIR" "$RUNNER_TEMP/msvc-download/X64.Debuggers.And.Tools-x64_en-us.msi" > /dev/null
+            "$RUNNER_TEMP/msvc-wine/install.sh" "$MSVC_DIR"
+            cat > "$MSVC_DIR/bin/x64/pdbcopy" << 'EOF'
+          #!/usr/bin/env bash
+          . "$(dirname "$0")"/msvcenv.sh
+          SDKDEBUGBINDIR="$SDKBASE/Debuggers/x64"
+          "$(dirname "$0")"/wine-msvc.sh "$SDKDEBUGBINDIR/pdbcopy.exe" "$@"
+          EOF
+            ln -sf ./pdbcopy "$MSVC_DIR/bin/x64/pdbcopy.exe"
+            chmod +x "$MSVC_DIR"/bin/x64/pdbcopy*
+            touch "$MSVC_DIR/.installed"
+            rm -rf "$RUNNER_TEMP/msvc-download"
+          fi
+          echo "UE_WINE_MSVC=$(realpath "$MSVC_DIR")" >> "$GITHUB_ENV"
+
+      # ---------- SML Starter Project + this mod ----------
+      - uses: actions/checkout@v4
+        with:
+          path: LiveMap
+
+      - name: Check out SML and add LiveMap
+        run: |
+          git clone --filter=blob:none https://github.com/satisfactorymodding/SatisfactoryModLoader.git "$WORK/SML"
+          git -C "$WORK/SML" checkout "$SML_REF"
+          cp -r "$GITHUB_WORKSPACE/LiveMap/Mod/LiveMap" "$WORK/SML/Mods/LiveMap"
+
+      - name: Download and set up Unreal Engine
+        working-directory: ${{ env.WORK }}
+        env:
+          GH_TOKEN: ${{ secrets.UE_TOKEN }}
+        run: |
+          mkdir -p ue && cd ue
+          gh release download "$UE_RELEASE" --repo satisfactorymodding/UnrealEngine -p "UnrealEngine-CSS-Editor-Linux.tar.zst.*"
+          cat UnrealEngine-CSS-Editor-Linux.tar.zst.* | zstd -d | tar -xf -
+          rm UnrealEngine-CSS-Editor-Linux.tar.zst.*
+          ./Engine/Binaries/Linux/UnrealVersionSelector -register
+          df -h /mnt
+
+      - name: Download and integrate Wwise
+        working-directory: ${{ env.WORK }}
+        env:
+          GH_TOKEN: ${{ secrets.UE_TOKEN }}
+          WWISE_EMAIL: ${{ secrets.WWISE_EMAIL }}
+          WWISE_PASSWORD: ${{ secrets.WWISE_PASSWORD }}
+        run: |
+          gh release download --repo mircearoata/wwise-cli -p wwise-cli_linux_amd64 -O wwise-cli
+          chmod +x ./wwise-cli
+          # stdout discarded so signed download URLs don't end up in the log
+          ./wwise-cli download --sdk-version "$WWISE_SDK" --filter Packages=SDK --filter DeploymentPlatforms=Windows_vc160 --filter DeploymentPlatforms=Windows_vc170 --filter DeploymentPlatforms=Linux --filter DeploymentPlatforms= >/dev/null
+          ./wwise-cli integrate-ue --integration-version "$WWISE_INTEGRATION" --project "$WORK/SML/FactoryGame.uproject" >/dev/null
+
+      - name: Build Development Editor
+        run: "$WORK/ue/Engine/Build/BatchFiles/Linux/Build.sh" FactoryEditor Linux Development -project="$WORK/SML/FactoryGame.uproject"
+
+      - name: Package LiveMap (Alpakit PackagePlugin)
+        run: |
+          ulimit -n 1048576 || ulimit -n "$(ulimit -Hn)"
+          "$WORK/ue/Engine/Build/BatchFiles/RunUAT.sh" -ScriptsForProject="$WORK/SML/FactoryGame.uproject" PackagePlugin \
+            -Project="$WORK/SML/FactoryGame.uproject" -dlcname=LiveMap -build \
+            -clientconfig=Shipping -serverconfig=Shipping -platform=Win64 -nocompileeditor -installed -utf8output
+          ls -la "$WORK/SML/Saved/ArchivedPlugins/LiveMap/"
+
+      - name: Publish GitHub Release
+        working-directory: ${{ env.WORK }}/SML/Saved/ArchivedPlugins/LiveMap
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          VERSION=$(jq -r .SemVersion "$GITHUB_WORKSPACE/LiveMap/Mod/LiveMap/LiveMap.uplugin")
+          TAG="v${VERSION}-build.${GITHUB_RUN_NUMBER}"
+          for f in *.zip; do mv "$f" "${f%.zip}-${VERSION}-build.${GITHUB_RUN_NUMBER}.zip"; done
+          gh release create "$TAG" *.zip \
+            --repo "$GITHUB_REPOSITORY" --target "$GITHUB_SHA" \
+            --title "Live Map ${VERSION} (build ${GITHUB_RUN_NUMBER})" \
+            --generate-notes --latest

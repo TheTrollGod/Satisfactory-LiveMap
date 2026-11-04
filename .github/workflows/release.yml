@@ -279,7 +279,7 @@ jobs:
 
           Linux server: \`cd\` into the server folder and run \`wget -qO- https://raw.githubusercontent.com/${GITHUB_REPOSITORY}/main/scripts/install.sh | bash\`.
 
-          Full guide: [docs/INSTALL.md](https://github.com/${GITHUB_REPOSITORY}/blob/${GITHUB_SHA}/docs/INSTALL.md). The game-client build is for the Steam version.
+          Full guide: [docs/INSTALL.md](https://github.com/${GITHUB_REPOSITORY}/blob/${GITHUB_SHA}/docs/INSTALL.md).
 
           EOF
           gh release create "$TAG" *.zip \

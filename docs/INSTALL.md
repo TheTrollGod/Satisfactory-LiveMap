@@ -39,7 +39,7 @@ Each [release](https://github.com/TheTrollGod/Satisfactory-LiveMap/releases) is 
 |---|---|
 | `LiveMap-LinuxServer-<v>.zip` | Linux dedicated server |
 | `LiveMap-WindowsServer-<v>.zip` | Windows dedicated server |
-| `LiveMap-Windows-<v>.zip` | Game client on Windows (listen server). Steam build only |
+| `LiveMap-Windows-<v>.zip` | Game client on Windows (listen server). Steam and Epic |
 | `LiveMap-Web-<v>.zip` | Map page as static files. Optional; the mod already serves it |
 
 Each mod zip holds the plugin root: `LiveMap.uplugin`, `Binaries/<platform>/`,
@@ -122,12 +122,13 @@ Expand-Archive LiveMap-WindowsServer-<v>.zip -DestinationPath "$mods\LiveMap"
 Test-Path "$mods\LiveMap\LiveMap.uplugin"
 ```
 
-### 3.4 Listen server (host player's game, Windows/Steam)
+### 3.4 Listen server (host player's game, Windows)
 
-Extract `LiveMap-Windows-<v>.zip` into
-`<Steam library>\steamapps\common\Satisfactory\FactoryGame\Mods\LiveMap\`. The mod
-starts when the host loads a save. The Epic Games build is not supported (it
-requires a differently named binary not included in releases).
+Extract `LiveMap-Windows-<v>.zip` into `<game install>\FactoryGame\Mods\LiveMap\`
+(Steam: `<Steam library>\steamapps\common\Satisfactory`; Epic: the folder chosen at
+install). The zip
+contains both the Steam (`FactoryGameSteam-*`) and Epic (`FactoryGameEGS-*`) binaries;
+the game loads the matching one. The mod starts when the host loads a save.
 
 ## 4. Firewall
 
@@ -237,7 +238,6 @@ Known limitations:
 
 - No terrain background on dedicated servers (no GPU to render it). All other layers work.
 - Dedicated server builds are produced by CI but have not yet been verified on a live server.
-- The listen-server build supports Steam only.
 
 ## 9. Update, rollback, removal
 

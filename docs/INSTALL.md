@@ -2,8 +2,11 @@
 
 Live Map has two parts:
 
-- **The mod** (`LiveMap-Windows-<version>.zip`) runs inside the game and streams
-  the world over WebSocket on port 8086.
+- **The mod** runs wherever the world is hosted and streams it over WebSocket on
+  port 8086. There's one zip per place it can run:
+  - `LiveMap-Windows-<version>.zip`: you host from the game on Windows.
+  - `LiveMap-WindowsServer-<version>.zip`: Windows dedicated server.
+  - `LiveMap-LinuxServer-<version>.zip`: Linux dedicated server.
 - **The map page** (`LiveMap-Web-<version>.zip`) is a static web page you open in
   a browser. It connects to the mod and draws the map.
 
@@ -11,8 +14,9 @@ Both are attached to every [release](https://github.com/TheTrollGod/Satisfactory
 
 ## Requirements
 
-- Satisfactory 1.2 or newer, **Steam** version on Windows. (The Epic build needs a
-  different binary that the release doesn't include yet.)
+- Satisfactory 1.2 or newer. For hosting from the game: the **Steam** version on
+  Windows (the Epic build needs a different binary that the release doesn't include
+  yet). Dedicated servers work on Windows and Linux.
 - [Satisfactory Mod Loader (SML)](https://ficsit.app/mod/SML) 3.12 or newer. The easiest
   way to get it is to install any mod with
   [Satisfactory Mod Manager](https://smm.ficsit.app/), which pulls SML in for you.
@@ -41,6 +45,32 @@ Both are attached to every [release](https://github.com/TheTrollGod/Satisfactory
 To check it's running, open <http://localhost:8086/health> in a browser while the
 save is loaded.
 
+### On a dedicated server
+
+The server needs SML too. [Satisfactory Mod Manager](https://smm.ficsit.app/) can
+install mods on a server (local folder or SFTP), or use
+[ficsit-cli](https://github.com/satisfactorymodding/ficsit-cli) on the server itself.
+
+Then install Live Map by hand, the same way as above, using the server zip:
+
+```bash
+# Linux example; adjust the path to your server install
+cd ~/SatisfactoryDedicatedServer/FactoryGame/Mods
+mkdir -p LiveMap && cd LiveMap
+unzip ~/LiveMap-LinuxServer-<version>.zip
+ls LiveMap.uplugin   # should exist at this level
+```
+
+On Windows servers, extract `LiveMap-WindowsServer-<version>.zip` into
+`<server>\FactoryGame\Mods\LiveMap\` instead.
+
+Restart the server, then open TCP port 8086 in the server's firewall (for example
+`sudo ufw allow 8086/tcp`) and your hosting provider's firewall if it has one.
+Check it with `curl http://<server-ip>:8086/health`.
+
+On a dedicated server the map has no terrain background yet (the server has no GPU
+to render it). Players, vehicles, trains, rails and buildings all show.
+
 ## 2. Open the map
 
 The map page has to be served over HTTP; opening `index.html` straight from disk
@@ -67,8 +97,9 @@ Point the page at the host's address with the `ws` parameter:
 http://localhost:5173/?ws=ws://192.168.1.50:8086/ws
 ```
 
-Replace `192.168.1.50` with the IP of the PC running the game, and make sure the
-firewall allows port 8086.
+Replace `192.168.1.50` with the IP of the PC or server running the world, and make
+sure the firewall allows port 8086. For a dedicated server, you can also put the map
+page on the server itself and serve it from there.
 
 There is no password on the map yet. Anyone who can reach port 8086 can see player
 positions and your base layout, so don't forward it to the internet.

@@ -1,0 +1,5 @@
+blank_issues_enabled: false
+contact_links:
+  - name: Installation guide
+    url: https://github.com/TheTrollGod/Satisfactory-LiveMap/blob/main/docs/INSTALL.md
+    about: Check the install guide and its troubleshooting table before opening an issue.

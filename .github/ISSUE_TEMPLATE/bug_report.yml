@@ -1,0 +1,70 @@
+name: Bug report
+description: Something doesn't work, crashes, or shows the wrong thing on the map.
+labels: ["bug"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for reporting. The details below let the bug be reproduced and fixed without a round of follow-up questions.
+  - type: input
+    id: version
+    attributes:
+      label: Live Map version
+      description: The release tag or zip name, e.g. `v0.1.0-build.6`.
+      placeholder: v0.1.0-build.6
+    validations:
+      required: true
+  - type: dropdown
+    id: host
+    attributes:
+      label: Where does the mod run?
+      options:
+        - Linux dedicated server
+        - Windows dedicated server
+        - Hosting from the game (Windows, Steam)
+        - Other
+    validations:
+      required: true
+  - type: input
+    id: versions
+    attributes:
+      label: Game and SML versions
+      description: Game build (shown in the main menu) and SML version.
+      placeholder: "Satisfactory 1.2 build 513885, SML 3.12.0"
+    validations:
+      required: true
+  - type: textarea
+    id: what
+    attributes:
+      label: What happened
+      description: What you saw, and what you expected instead.
+    validations:
+      required: true
+  - type: textarea
+    id: steps
+    attributes:
+      label: Steps to reproduce
+      placeholder: |
+        1. Start the server with ...
+        2. Open http://<host>:8086/
+        3. ...
+    validations:
+      required: true
+  - type: textarea
+    id: logs
+    attributes:
+      label: Log lines
+      description: |
+        Lines containing `LiveMap` from `FactoryGame.log` (see the Verification section of docs/INSTALL.md for its location), e.g. `grep LiveMap FactoryGame.log`. For a crash, attach the whole log.
+      render: text
+  - type: textarea
+    id: browser
+    attributes:
+      label: Browser console (map page problems only)
+      description: Errors from the browser's developer console (F12), and the browser name.
+      render: text
+  - type: textarea
+    id: extra
+    attributes:
+      label: Anything else
+      description: Screenshots, save size (number of buildings), other mods installed, reverse proxy setup.

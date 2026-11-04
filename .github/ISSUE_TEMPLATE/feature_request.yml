@@ -1,0 +1,27 @@
+name: Feature request
+description: Something new to show on the map, or a way to make it easier to run.
+labels: ["enhancement"]
+body:
+  - type: textarea
+    id: problem
+    attributes:
+      label: What do you want to do?
+      description: The goal, not the solution. For example "see which trains are stuck", not "add a red icon".
+    validations:
+      required: true
+  - type: textarea
+    id: idea
+    attributes:
+      label: How could it work?
+      description: Optional. Any idea of what it would look like on the map or in the config.
+  - type: dropdown
+    id: area
+    attributes:
+      label: Area
+      options:
+        - Map page (what's shown, controls)
+        - New data from the game (a building type, vehicles, power, ...)
+        - Server / install / configuration
+        - Other
+    validations:
+      required: true

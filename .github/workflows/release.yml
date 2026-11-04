@@ -22,11 +22,13 @@ on:
       - "docs/**"
       - "**/*.md"
       - "LICENSE*"
+      - ".github/ISSUE_TEMPLATE/**"
   pull_request:
     paths-ignore:
       - "docs/**"
       - "**/*.md"
       - "LICENSE*"
+      - ".github/ISSUE_TEMPLATE/**"
   workflow_dispatch:
 
 # A newer push to main replaces an older build still in progress.

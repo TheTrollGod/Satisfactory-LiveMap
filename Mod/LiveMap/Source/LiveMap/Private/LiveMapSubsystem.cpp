@@ -1,5 +1,6 @@
 #include "LiveMapSubsystem.h"
 #include "LiveMapModule.h"
+#include "WebAssets.h"
 
 #include "Async/Async.h"
 #include "Components/SplineComponent.h"
@@ -133,6 +134,7 @@ void ALiveMapSubsystem::BeginPlay()
 	livemap::ServerConfig Config;
 	Config.Port = Port;
 	Config.TickHz = FMath::Clamp(DynamicTickHz, 1, 30);
+	Config.WebFiles = livemap::GetWebFiles(Config.WebFileCount);
 	std::string Error;
 	if (!Server->Start(Config, &Error))
 	{
@@ -147,6 +149,14 @@ void ALiveMapSubsystem::BeginPlay()
 	// Once, a little after load so it doesn't stack on the save's own loading hitch.
 	GetWorldTimerManager().SetTimer(TerrainTimer, this, &ALiveMapSubsystem::ExportTerrain, 3.f, false);
 	UE_LOG(LogLiveMap, Log, TEXT("LiveMap: listening on port %d at %d Hz"), Port, Config.TickHz);
+	if (Config.WebFileCount > 0)
+	{
+		UE_LOG(LogLiveMap, Log, TEXT("LiveMap: map page at http://<this host>:%d/"), Port);
+	}
+	else
+	{
+		UE_LOG(LogLiveMap, Log, TEXT("LiveMap: built without the map page; serve web/dist separately"));
+	}
 }
 
 void ALiveMapSubsystem::EndPlay(const EEndPlayReason::Type EndPlayReason)

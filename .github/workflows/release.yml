@@ -96,6 +96,18 @@ jobs:
           name: e2e-screenshot
           path: e2e.png
           if-no-files-found: ignore
+      - name: Map page served by the core server (embedded build)
+        run: |
+          node scripts/embed-web.mjs web/dist "$PWD/Mod/LiveMap/Source/LiveMap/Private/Core/WebAssets.inc"
+          cmake -S tests/core -B build/embed -DCMAKE_BUILD_TYPE=Release && cmake --build build/embed -j"$(nproc)" --target livemap_sim
+          ./build/embed/livemap_sim 18999 > /dev/null &
+          SIM=$!
+          npx -y wait-on@8.0.1 -t 15000 http://127.0.0.1:18999/health
+          curl -fsS http://127.0.0.1:18999/ | grep -q 'id="map"'
+          ASSET=$(curl -fsS http://127.0.0.1:18999/ | grep -o '/assets/[^"]*\.js' | head -n1)
+          curl -fsSI "http://127.0.0.1:18999$ASSET" | grep -qi 'content-type: text/javascript'
+          echo "serves / and $ASSET"
+          kill "$SIM"
       - uses: actions/upload-artifact@v7
         with:
           name: web-dist
@@ -233,6 +245,14 @@ jobs:
           git -C "$WORK/SML" checkout "$SML_REF"
           cp -r "$GITHUB_WORKSPACE/LiveMap/Mod/LiveMap" "$WORK/SML/Mods/LiveMap"
 
+      - uses: actions/download-artifact@v5
+        with:
+          name: web-dist
+          path: ${{ env.WORK }}/web-dist
+
+      - name: Embed the map page in the mod
+        run: node "$GITHUB_WORKSPACE/LiveMap/scripts/embed-web.mjs" "$WORK/web-dist" "$WORK/SML/Mods/LiveMap/Source/LiveMap/Private/Core/WebAssets.inc"
+
       - name: Download and set up Unreal Engine
         working-directory: ${{ env.WORK }}
         env:
@@ -271,11 +291,6 @@ jobs:
             -server -serverplatform=Win64+Linux -nocompileeditor -installed -utf8output
           ls -la "$WORK/SML/Saved/ArchivedPlugins/LiveMap/"
 
-      - uses: actions/download-artifact@v5
-        with:
-          name: web-dist
-          path: ${{ env.WORK }}/web-dist
-
       - name: Publish GitHub Release
         working-directory: ${{ env.WORK }}/SML/Saved/ArchivedPlugins/LiveMap
         env:
@@ -291,7 +306,9 @@ jobs:
 
           1. Install [SML](https://ficsit.app/mod/SML) 3.12+ (Satisfactory Mod Manager does this for you).
           2. Pick the zip for where the world runs: \`LiveMap-Windows\` (hosting from the game), \`LiveMap-WindowsServer\` or \`LiveMap-LinuxServer\` (dedicated server). Extract it into \`<game or server>/FactoryGame/Mods/LiveMap/\` so \`LiveMap.uplugin\` is directly inside that folder.
-          3. Load a save, extract \`LiveMap-Web-${SUFFIX}.zip\`, serve it (\`npx serve -l 5173 .\`) and open http://localhost:5173.
+          3. Start the world and open \`http://<host>:8086/\` in a browser. The map page is built into the mod. (\`LiveMap-Web\` is only needed to host the page somewhere else.)
+
+          Linux server: \`cd\` into the server folder and run \`wget -qO- https://raw.githubusercontent.com/${GITHUB_REPOSITORY}/main/scripts/install.sh | bash\`.
 
           Full guide: [docs/INSTALL.md](https://github.com/${GITHUB_REPOSITORY}/blob/${GITHUB_SHA}/docs/INSTALL.md). The game-client build is for the Steam version.
 

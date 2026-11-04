@@ -86,6 +86,12 @@ namespace livemap
 
 		mg_set_request_handler(Context, "/health$", &Server::OnHealth, this);
 		mg_set_request_handler(Context, "/static/", &Server::OnStatic, this);
+		if (Config.WebFiles && Config.WebFileCount > 0)
+		{
+			mg_set_request_handler(Context, "/$", &Server::OnWebFile, this);
+			mg_set_request_handler(Context, "/index.html$", &Server::OnWebFile, this);
+			mg_set_request_handler(Context, "/assets/", &Server::OnWebFile, this);
+		}
 		mg_set_websocket_handler(Context, "/ws$", &Server::OnWsConnect, &Server::OnWsReady,
 			&Server::OnWsData, &Server::OnWsClose, this);
 		return true;
@@ -295,6 +301,38 @@ namespace livemap
 			Doc.ContentType.c_str(), static_cast<unsigned long long>(Doc.Version), static_cast<unsigned long long>(Doc.Body->size()));
 		mg_write(Conn, Doc.Body->data(), Doc.Body->size());
 		return 200;
+	}
+
+	int Server::OnWebFile(mg_connection* Conn, void* User)
+	{
+		const Server* Self = static_cast<const Server*>(User);
+		const mg_request_info* Info = mg_get_request_info(Conn);
+		std::string Path = Info && Info->local_uri ? Info->local_uri : "/";
+		if (Path == "/")
+		{
+			Path = "/index.html";
+		}
+		for (size_t I = 0; I < Self->Config.WebFileCount; ++I)
+		{
+			const EmbeddedFile& F = Self->Config.WebFiles[I];
+			if (Path != F.Path)
+			{
+				continue;
+			}
+			// Vite puts a content hash in every /assets/ name, so those never change.
+			const bool bHashed = Path.compare(0, 8, "/assets/") == 0;
+			mg_printf(Conn,
+				"HTTP/1.1 200 OK\r\nContent-Type: %s\r\nCache-Control: %s\r\n"
+				"Content-Length: %llu\r\nConnection: close\r\n\r\n",
+				F.ContentType, bHashed ? "public, max-age=31536000, immutable" : "no-cache",
+				static_cast<unsigned long long>(F.Size));
+			mg_write(Conn, F.Data, F.Size);
+			return 200;
+		}
+		mg_printf(Conn,
+			"HTTP/1.1 404 Not Found\r\nContent-Type: text/plain\r\n"
+			"Content-Length: 9\r\nConnection: close\r\n\r\nnot found");
+		return 404;
 	}
 
 	int Server::OnWsConnect(const mg_connection*, void*)

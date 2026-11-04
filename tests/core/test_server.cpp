@@ -347,6 +347,47 @@ static void TestStaticDocuments()
 	S.Stop();
 }
 
+static void TestWebFiles()
+{
+	static const unsigned char Index[] = {'<', 'h', '1', '>'};
+	static const unsigned char Js[] = {'x', '=', '1', 0}; // binary-safe, with a NUL
+	static const EmbeddedFile Files[] = {
+		{"/index.html", "text/html; charset=utf-8", Index, sizeof(Index)},
+		{"/assets/index-abc.js", "text/javascript; charset=utf-8", Js, sizeof(Js)},
+	};
+	{
+		// Without web files, nothing is served at "/".
+		Server S;
+		ServerConfig C;
+		C.Port = GPort;
+		CHECK(S.Start(C, nullptr));
+		std::string Body;
+		CHECK(HttpGet("/", &Body) != 200);
+		S.Stop();
+	}
+	++GPort;
+	Server S;
+	ServerConfig C;
+	C.Port = GPort;
+	C.WebFiles = Files;
+	C.WebFileCount = 2;
+	CHECK(S.Start(C, nullptr));
+	std::string Body, Type;
+	CHECK_EQ(HttpGet("/", &Body, nullptr, &Type), 200);
+	CHECK_EQ(Body, std::string("<h1>"));
+	CHECK_EQ(Type, std::string("text/html; charset=utf-8"));
+	CHECK_EQ(HttpGet("/index.html", &Body), 200);
+	CHECK_EQ(HttpGet("/?ws=ws://x/ws", &Body), 200); // query string ignored
+	CHECK_EQ(HttpGet("/assets/index-abc.js", &Body, nullptr, &Type), 200);
+	CHECK(Body == std::string("x=1\0", 4));
+	CHECK_EQ(Type, std::string("text/javascript; charset=utf-8"));
+	CHECK_EQ(HttpGet("/assets/missing.js", &Body), 404);
+	// The other endpoints still win.
+	CHECK_EQ(HttpGet("/health", &Body), 200);
+	CHECK_EQ(HttpGet("/static/nope", &Body), 404);
+	S.Stop();
+}
+
 static void TestPortInUse()
 {
 	Server A, B;
@@ -441,6 +482,7 @@ int main()
 		{"request_resync", TestRequestResync},
 		{"health", TestHealth},
 		{"static_documents", TestStaticDocuments},
+		{"web_files", TestWebFiles},
 		{"port_in_use", TestPortInUse},
 		{"restart", TestRestart},
 		{"stress_churn_resync", TestStressChurnAndResync},

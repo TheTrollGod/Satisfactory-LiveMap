@@ -84,6 +84,10 @@ Rules that matter:
 5. Package with Alpakit (Windows + LinuxServer targets).
 6. Frontend: `cd web && npm install && npm run dev`, point it at
    `ws://<host>:8086/ws` (port configurable).
+7. To have your local mod build serve the map page at `http://localhost:8086/`, run
+   `npm run build && npm run embed` in `web/` before building the mod. That writes
+   the gitignored `Private/Core/WebAssets.inc`; without it the mod builds and runs
+   but serves no page. CI does this for every release.
 
 ## Testing
 
@@ -119,7 +123,7 @@ toolchain, a dedicated server.
 - [ ] M3: Static layers: rails (done), buildings (footprints, incl. lightweight foundations), belts, pipes, hypertubes, power lines (written and tested outside the game; needs in-game run); terrain background
 - [ ] M4: Build/dismantle events -> incremental updates
 - [ ] M5: Config (port, tick rate, auth token), dedicated server testing
-- [ ] M6: Serve the built frontend from the mod itself
+- [x] M6: Serve the built frontend from the mod itself (embedded at build time; see `scripts/embed-web.mjs`)
 
 ## Open questions
 

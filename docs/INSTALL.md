@@ -5,15 +5,14 @@ player-hosted (listen) server.
 
 ## 1. Overview
 
-Live Map has two components:
-
-| Component | Runs on | Function |
-|---|---|---|
-| Mod (`LiveMap`) | The machine hosting the world: dedicated server or the host player's game | Reads world state on the game thread and serves it over HTTP and WebSocket |
-| Map frontend | Any static web server | Single-page app (HTML/JS). Connects to the mod from the viewer's browser |
+Live Map is a single server-side mod. It reads world state on the game thread and
+serves both the data (HTTP and WebSocket) and the map page itself. After installing
+it and starting the world, browse to `http://<host>:8086/`. Nothing else needs to be
+installed or run.
 
 The mod is server-side only (`RequiredOnRemote: false`). Connecting players do not
-need it installed.
+need it installed. The map page is also published separately (`LiveMap-Web`) for
+setups that host it elsewhere (section 6), but that is optional.
 
 ### 1.1 Network interface
 
@@ -22,13 +21,14 @@ share the port. There is no TLS.
 
 | Path | Protocol | Purpose |
 |---|---|---|
+| `/`, `/assets/*` | HTTP GET | The map page (compiled into the mod) |
 | `/health` | HTTP GET | Liveness check, returns `200` with a JSON body |
 | `/ws` | WebSocket | Snapshot on connect, then dynamic deltas (players, vehicles, trains, drones) at 5 Hz |
 | `/static/*` | HTTP GET | Versioned static layers (buildings, rails, belts, pipes, power lines) and the terrain image (`/static/map`) |
 
-HTTP responses carry `Access-Control-Allow-Origin: *`, so the frontend can be served
-from a different origin than the mod. The browser connects to the mod directly; the
-frontend's web server does not proxy anything by default.
+The page connects back to the host and port it was loaded from. Data endpoints carry
+`Access-Control-Allow-Origin: *`, so the page can also be hosted on a different
+origin (section 6).
 
 ### 1.2 Release artifacts
 
@@ -40,7 +40,7 @@ Each [release](https://github.com/TheTrollGod/Satisfactory-LiveMap/releases) is 
 | `LiveMap-LinuxServer-<v>.zip` | Linux dedicated server |
 | `LiveMap-WindowsServer-<v>.zip` | Windows dedicated server |
 | `LiveMap-Windows-<v>.zip` | Game client on Windows (listen server). Steam build only |
-| `LiveMap-Web-<v>.zip` | Map frontend (static files) |
+| `LiveMap-Web-<v>.zip` | Map page as static files. Optional; the mod already serves it |
 
 Each mod zip holds the plugin root: `LiveMap.uplugin`, `Binaries/<platform>/`,
 `Content/Paks/<platform>/`. It extracts to `FactoryGame/Mods/LiveMap/`.
@@ -153,9 +153,9 @@ New-NetFirewallRule -DisplayName "Satisfactory Live Map" -Direction Inbound -Pro
 
 ### 5.1 Reverse proxy (nginx example)
 
-Serves the frontend and proxies the mod under one HTTPS host with basic auth. The
-frontend derives the static-layer URL from the WebSocket host, so `/ws` and
-`/static/` must be at the root of the proxied host.
+Puts the mod behind HTTPS with basic auth. The page uses `wss://` automatically when
+loaded over HTTPS. The mod must be at the root of the proxied host (the page requests
+`/ws`, `/static/` and `/assets/` from the root).
 
 ```nginx
 server {
@@ -167,36 +167,32 @@ server {
     auth_basic           "Live Map";
     auth_basic_user_file /etc/nginx/livemap.htpasswd;
 
-    root /var/www/livemap;            # extracted LiveMap-Web zip
-    index index.html;
-
-    location /ws {
+    location / {
         proxy_pass http://127.0.0.1:8086;
         proxy_http_version 1.1;
         proxy_set_header Upgrade $http_upgrade;
         proxy_set_header Connection "upgrade";
         proxy_read_timeout 1h;
     }
-    location /static/ { proxy_pass http://127.0.0.1:8086; }
-    location /health  { proxy_pass http://127.0.0.1:8086; }
 }
 ```
 
-Viewers then open `https://map.example.com/?ws=wss://map.example.com/ws`. With this
-setup, block 8086 externally.
+Viewers open `https://map.example.com/`. With this setup, block 8086 externally.
 
-## 6. Map frontend
+## 6. Map page
 
-The frontend is static and must be served over HTTP(S); `file://` does not work
-(ES modules).
+The mod serves the page at `http://<host>:8086/`; no setup is needed.
+
+To host the page elsewhere instead (an existing web server, a different domain),
+use the `LiveMap-Web` zip. It is static and must be served over HTTP(S); `file://`
+does not work (ES modules).
 
 ```bash
 bash install.sh --web /var/www/livemap      # or unzip LiveMap-Web-<v>.zip yourself
-cd /var/www/livemap && python3 -m http.server 5173   # quick test only
 ```
 
-Any static server works (nginx, Caddy, `npx serve`). The page connects to
-`ws://localhost:8086/ws` unless told otherwise:
+A separately hosted page connects to its own host by default, so pass the mod's
+address:
 
 | Query parameter | Example | Effect |
 |---|---|---|
@@ -210,7 +206,11 @@ curl -i http://<host>:8086/health          # expect HTTP/1.1 200 OK
 grep LiveMap <server>/FactoryGame/Saved/Logs/FactoryGame.log
 ```
 
-A healthy start logs `LiveMap: listening on port 8086 at 5 Hz`. On a dedicated
+Then open `http://<host>:8086/` in a browser; the status line at the bottom left
+should read `connected`.
+
+A healthy start logs `LiveMap: listening on port 8086 at 5 Hz` and
+`LiveMap: map page at http://<this host>:8086/`. On a dedicated
 server it also logs `LiveMap: no terrain on a server that can't render` (expected,
 see 8).
 
@@ -257,7 +257,8 @@ interface), so saves load normally after removal.
 | Mod not loaded, no `LiveMap` log lines | SML missing or older than 3.12, or wrong zip for the platform. Check `FactoryGame/Mods/SML/` and that `LiveMap/Binaries/` contains your platform |
 | `could not listen on port 8086` in log | Port in use (`ss -ltnp 'sport = :8086'` / `Get-NetTCPConnection -LocalPort 8086`). Free it and restart |
 | `/health` works locally, not remotely | Firewall or security group (section 4) |
-| Frontend shows "disconnected" | Wrong `ws` parameter, port blocked, or no world loaded yet (the mod starts with the world) |
+| `http://<host>:8086/` returns 404, `/health` works | Mod built without the page (log says `built without the map page`). Use a release build |
+| Page shows "disconnected" | No world loaded yet (the mod starts with the world), port blocked, or a wrong `ws` parameter on a separately hosted page |
 | Frontend loads but no buildings | Static layers rebuild every 10 s after load; wait, then check the browser console for failed `/static/` requests |
 | Mixed-content error in browser | Page served over HTTPS but `ws=ws://...`. Use the reverse proxy and `wss://` (5.1) |
 | Script: `couldn't find the server` | Run from the directory containing `FactoryGame/`, or pass it as an argument |

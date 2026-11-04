@@ -14,7 +14,13 @@ import {
 import { createStaticLayers } from "./static";
 
 const params = new URLSearchParams(location.search);
-const WS_URL = params.get("ws") ?? import.meta.env.VITE_LIVEMAP_WS ?? "ws://localhost:8086/ws";
+// Default: the mod serves this page itself, so the WebSocket is on the same host.
+// In `npm run dev` the page comes from Vite instead, so point at a local game/sim.
+const SAME_HOST_WS = `${location.protocol === "https:" ? "wss:" : "ws:"}//${location.host}/ws`;
+const WS_URL =
+  params.get("ws") ??
+  import.meta.env.VITE_LIVEMAP_WS ??
+  (import.meta.env.DEV || location.protocol === "file:" ? "ws://localhost:8086/ws" : SAME_HOST_WS);
 const USE_MOCK = params.has("mock");
 // Static layers come over plain HTTP from the same server: ws://host:port/ws -> http://host:port
 const HTTP_BASE = (() => {

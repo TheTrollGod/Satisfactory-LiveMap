@@ -6,7 +6,8 @@
   "scripts": {
     "dev": "vite",
     "build": "tsc --noEmit && vite build",
-    "preview": "vite preview"
+    "preview": "vite preview",
+    "embed": "node ../scripts/embed-web.mjs"
   },
   "dependencies": {
     "leaflet": "1.9.4"

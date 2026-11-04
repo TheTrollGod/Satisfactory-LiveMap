@@ -157,4 +157,4 @@ if [ -n "$WEB_DIR" ]; then
 fi
 
 echo
-info "Done. Restart the server, open TCP port 8086, and check http://<server-ip>:8086/health"
+info "Done. Start the server, open TCP port 8086, then browse to http://<server-ip>:8086/"

@@ -14,6 +14,7 @@ set(SANITIZE "" CACHE STRING "address, thread, or empty")
 add_library(livemap_core STATIC
   ${CORE}/LiveMapCore.cpp
   ${CORE}/LiveMapServer.cpp
+  ${CORE}/WebAssets.cpp
   ${CORE}/Civetweb.c)
 target_include_directories(livemap_core PUBLIC ${CORE} ${MOD}/ThirdParty/civetweb/include)
 # Match Unreal: no exceptions, no RTTI in our code.

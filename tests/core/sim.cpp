@@ -4,6 +4,7 @@
 //   livemap_sim [port] [seconds] [foundations]
 #include "LiveMapCore.h"
 #include "LiveMapServer.h"
+#include "WebAssets.h"
 
 #include <algorithm>
 #include <chrono>
@@ -84,6 +85,7 @@ int main(int Argc, char** Argv)
 {
 	ServerConfig C;
 	C.Port = Argc > 1 ? std::atoi(Argv[1]) : 8086;
+	C.WebFiles = GetWebFiles(C.WebFileCount); // the map page, if web/dist was embedded
 	const int Seconds = Argc > 2 ? std::atoi(Argv[2]) : 0;
 	const int Foundations = Argc > 3 ? std::atoi(Argv[3]) : 2000;
 

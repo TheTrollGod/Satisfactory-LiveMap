@@ -22,6 +22,15 @@ struct mg_connection;
 
 namespace livemap
 {
+	/** A file compiled into the binary, served at Path (e.g. "/index.html"). */
+	struct EmbeddedFile
+	{
+		const char* Path;
+		const char* ContentType;
+		const unsigned char* Data;
+		size_t Size;
+	};
+
 	struct ServerConfig
 	{
 		int Port = 8086;
@@ -32,6 +41,12 @@ namespace livemap
 		int TickHz = 5;
 		/** Optional directory to serve the built frontend from. Empty disables static files. */
 		std::string DocumentRoot;
+		/**
+		 * The built frontend, compiled in (see WebAssets.h). Served at "/" (index.html)
+		 * and "/assets/...". Must outlive the server. Null/0 disables it.
+		 */
+		const EmbeddedFile* WebFiles = nullptr;
+		size_t WebFileCount = 0;
 	};
 
 	class Server
@@ -83,6 +98,7 @@ namespace livemap
 
 		static int OnHealth(mg_connection* Conn, void* User);
 		static int OnStatic(mg_connection* Conn, void* User);
+		static int OnWebFile(mg_connection* Conn, void* User);
 		static int OnWsConnect(const mg_connection* Conn, void* User);
 		static void OnWsReady(mg_connection* Conn, void* User);
 		static int OnWsData(mg_connection* Conn, int Bits, char* Data, size_t Len, void* User);
